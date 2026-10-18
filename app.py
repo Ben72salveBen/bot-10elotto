@@ -1,8 +1,8 @@
 import os
 import json
 import re
+import urllib.request
 import ssl
-import cloudscraper
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina per adattarsi bene ai dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto PyTorch",
+    page_title="Bot 10eLotto PyTorch LSTM",
     page_icon="🎲",
     layout="centered"
 )
@@ -46,193 +46,191 @@ def salva_archivio(archivio):
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
     
-    # Sfruttiamo cloudscraper per bypassare le protezioni anti-bot sul cloud
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'firefox',
-            'platform': 'windows',
-            'desktop': True
-        }
-    )
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.9',
+        'Connection': 'keep-alive',
+        'Referer': 'https://lottologia.com/'
+    }
+    
+    req = urllib.request.Request(url, headers=headers)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     
     try:
-        response = scraper.get(url, timeout=15)
-        if response.status_code != 200:
-            st.error(f"Errore HTTP: {response.status_code}")
-            return []
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            html = response.read().decode('utf-8', 'ignore')
             
-        html = response.text
-        
-        if "Domande Frequenti" in html:
-            html = html.split("Domande Frequenti")[0]
-        elif "domande frequenti" in html:
-            html = html.split("domande frequenti")[0]
-            
-        if "Seleziona Numeri" in html:
-            html = html.split("Seleziona Numeri")[-1]
-        elif "seleziona numeri" in html:
-            html = html.split("seleziona numeri")[-1]
-        
-        estrazioni_trovate = []
-        blocchi = re.split(r'#(\d+)', html)
-        
-        for i in range(1, len(blocchi), 2):
-            id_concorso = int(blocchi[i])
-            testo_blocco = blocchi[i+1]
-            
-            if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
-                continue
-            
-            match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
-            if match_num:
-                testo_sezione = match_num.group(1)
-                pezzi_cifre = re.findall(r'\d+', testo_sezione)
+            if "Domande Frequenti" in html:
+                html = html.split("Domande Frequenti")[0]
+            elif "domande frequenti" in html:
+                html = html.split("domande frequenti")[0]
                 
-                numeri_validi = []
-                visti = set()
+            if "Seleziona Numeri" in html:
+                html = html.split("Seleziona Numeri")[-1]
+            elif "seleziona numeri" in html:
+                html = html.split("seleziona numeri")[-1]
+            
+            estrazioni_trovate = []
+            blocchi = re.split(r'#(\d+)', html)
+            
+            for i in range(1, len(blocchi), 2):
+                id_concorso = int(blocchi[i])
+                testo_blocco = blocchi[i+1]
                 
-                for p in pezzi_cifre:
-                    if len(p) > 2 and len(p) % 2 == 0:
-                        for j in range(0, len(p), 2):
-                            sub = int(p[j:j+2])
-                            if 1 <= sub <= 90 and sub not in visti:
-                                visti.add(sub)
-                                numeri_validi.append(sub)
-                    else:
-                        val = int(p)
-                        if 1 <= val <= 90 and val not in visti:
-                            visti.add(val)
-                            numeri_validi.append(val)
-                            
+                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
+                    continue
+                
+                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
+                if match_num:
+                    testo_sezione = match_num.group(1)
+                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    
+                    numeri_validi = []
+                    visti = set()
+                    
+                    for p in pezzi_cifre:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti:
+                                    visti.add(sub)
+                                    numeri_validi.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti:
+                                visti.add(val)
+                                numeri_validi.append(val)
+                                
+                        if len(numeri_validi) == 20:
+                            break
+                    
                     if len(numeri_validi) == 20:
-                        break
-                
-                if len(numeri_validi) == 20:
-                    numeri_validi.sort()
-                    estrazioni_trovate.append({
-                        'id': id_concorso,
-                        'numeri': numeri_validi
-                    })
+                        numeri_validi.sort()
+                        estrazioni_trovate.append({
+                            'id': id_concorso,
+                            'numeri': numeri_validi
+                        })
 
-        if not estrazioni_trovate:
-            return []
+            if not estrazioni_trovate:
+                return []
 
-        estrazioni_trovate.sort(key=lambda x: x['id'])
-        return [item['numeri'] for item in estrazioni_trovate]
+            estrazioni_trovate.sort(key=lambda x: x['id'])
+            return [item['numeri'] for item in estrazioni_trovate]
 
     except Exception as e:
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
-class Net10eLotto(nn.Module):
-    def __init__(self):
-        super(Net10eLotto, self).__init__()
-        self.fc1 = nn.Linear(3, 32)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.1)
-        self.fc2 = nn.Linear(32, 16)
-        self.fc3 = nn.Linear(16, 1)
-        self.sigmoid = nn.Sigmoid()
+# ==========================================
+# NUOVA ARCHITETTURA LSTM TEMPORALE
+# ==========================================
+class LottoLSTM(nn.Module):
+    def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
+        super(LottoLSTM, self).__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, output_dim)
+        )
 
     def forward(self, x):
-        out = self.fc1(x)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc2(out)
-        out = self.relu(out)
-        out = self.fc3(out)
-        out = self.sigmoid(out)
-        return out
+        out, _ = self.lstm(x)
+        last_step_out = out[:, -1, :]
+        logits = self.fc(last_step_out)
+        return logits
 
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    if len(archivio) == 0:
-        st.warning("L'archivio è vuoto. Scarica prima le estrazioni!")
+    lookback = 37  # Ciclo standard di 37 estrazioni
+    
+    if len(archivio) < lookback:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per avviare la rete LSTM temporale!")
         return
 
-    st.info(f"Archivio attuale: **{len(archivio)}** estrazioni registrate. Addestramento modello PyTorch in corso...")
+    st.info(f"Archivio attuale: **{len(archivio)}** concorsi. Addestramento rete LSTM temporale (Lookback: {lookback}) in corso...")
 
-    freq_totale = np.zeros(91)
-    freq_recente = np.zeros(91)
-    ritardi = np.zeros(91)
-    ultimo_visto = np.full(91, -1)
-
-    sessioni_recente = archivio[-10:]
-
+    # Conversione dell'archivio in matrice binaria Multi-Hot (90 elementi)
+    num_estrazioni = len(archivio)
+    binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
     for idx, ext in enumerate(archivio):
         for n in ext:
             if 1 <= n <= 90:
-                freq_totale[n] += 1
-                ultimo_visto[n] = idx
+                binary_matrix[idx, n - 1] = 1.0
 
-    for ext in sessioni_recente:
-        for n in ext:
-            if 1 <= n <= 90:
-                freq_recente[n] += 1
+    # Preparazione dei dataset per le sequenze temporali
+    X_list, y_list = [], []
+    for i in range(len(binary_matrix) - lookback):
+        X_list.append(binary_matrix[i : i + lookback])
+        y_list.append(binary_matrix[i + lookback])
 
-    tot_archivio = len(archivio)
-    for i in range(1, 91):
-        ritardi[i] = tot_archivio if ultimo_visto[i] == -1 else (tot_archivio - 1 - ultimo_visto[i])
+    X = torch.tensor(np.array(X_list), dtype=torch.float32)
+    y = torch.tensor(np.array(y_list), dtype=torch.float32)
 
-    max_f_tot = max(freq_totale.max(), 1.0)
-    max_f_rec = max(freq_recente.max(), 1.0)
-    max_r = max(ritardi.max(), 1.0)
-
-    X_data = []
-    y_data = []
-
-    for i in range(1, 91):
-        f_tot_norm = freq_totale[i] / max_f_tot
-        f_rec_norm = freq_recente[i] / max_f_rec
-        ritardo_norm = ritardi[i] / max_r
-
-        x_feat = [f_tot_norm, f_rec_norm, ritardo_norm]
-        target_score = (0.5 * f_rec_norm) + (0.3 * f_tot_norm) + (0.2 * (1.0 - ritardo_norm))
-        target_score = max(0.0, min(1.0, target_score))
-        
-        X_data.append(x_feat)
-        y_data.append([target_score])
-
-    X = torch.tensor(X_data, dtype=torch.float32)
-    y = torch.tensor(y_data, dtype=torch.float32)
-
-    model = Net10eLotto()
-    criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.015)
+    # Inizializzazione e Training del Modello LSTM
+    model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     model.train()
-    for epoch in range(150):
+    epochs = 40
+    for epoch in range(epochs):
         optimizer.zero_grad()
-        outputs = model(X)
-        loss = criterion(outputs, y)
+        logits = model(X)
+        loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
 
+    # Estrazione dell'ultimo blocco temporale per la previsione del prossimo concorso
     model.eval()
     with torch.no_grad():
-        preds = model(X).numpy().flatten()
+        ultimi_passi = binary_matrix[-lookback:]
+        input_tensor = torch.tensor(ultimi_passi, dtype=torch.float32).unsqueeze(0)
+        logits_pred = model(input_tensor)
+        probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    valutazioni = [{'numero': i + 1, 'score': preds[i]} for i in range(90)]
+    # Classificazione dei numeri in base al punteggio di probabilità della rete
+    valutazioni = [{'numero': i + 1, 'score': probs[i]} for i in range(90)]
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
     migliori = [item['numero'] for item in valutazioni[:quantita_numeri]]
     migliori.sort()
 
-    st.success("Previsione completata con successo!")
-    st.markdown(f"### 🧠 PREVISIONE PYTORCH ({quantita_numeri} NUMERI):")
+    st.success("Previsione LSTM completata con successo!")
+    st.markdown(f"### 🧠 GRUPPO CALDO PREVISTO ({quantita_numeri} NUMERI):")
     
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
+    
+    # Seleziona le prime coppie utili se il quantitativo lo consente
+    if quantita_numeri >= 2:
+        from itertools import combinations
+        coppie = list(combinations(migliori, 2))[:3]
+        st.markdown("#### 🎯 Sviluppo Coppie (Ambi Consigliati):")
+        for i, c in enumerate(coppie, 1):
+            st.text(f"• Giocata {i}: {c[0]:02d} - {c[1]:02d} (A massa pari)")
+
     st.balloons()
 
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto PyTorch")
-st.write("Generatore intelligente di previsioni statistiche per il 10eLotto ogni 5 minuti.")
+st.title("🎲 Bot 10eLotto PyTorch LSTM")
+st.write("Generatore sequenziale basato su reti LSTM per l'analisi temporale delle estrazioni.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-quantita = st.sidebar.slider("Quanti numeri vuoi giocare?", min_value=1, max_value=10, value=4)
+# Scelta della quantità di numeri da giocare
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -267,7 +265,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Elaborazione modello in corso..."):
+        with st.spinner("Elaborazione modello LSTM in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
