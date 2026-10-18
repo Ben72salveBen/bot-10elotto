@@ -4,14 +4,12 @@ import re
 import urllib.request
 import ssl
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
+from itertools import combinations
 import streamlit as st
 
 # Configurazione della pagina per adattarsi bene ai dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto PyTorch LSTM",
+    page_title="Bot 10eLotto Deterministico",
     page_icon="🎲",
     layout="centered"
 )
@@ -125,111 +123,70 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# NUOVA ARCHITETTURA LSTM TEMPORALE
+# MOTORE ANALITICO DETERMINISTICO (ZERO CASUALITÀ)
 # ==========================================
-class LottoLSTM(nn.Module):
-    def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
-        super(LottoLSTM, self).__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, output_dim)
-        )
-
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        last_step_out = out[:, -1, :]
-        logits = self.fc(last_step_out)
-        return logits
-
-def elabora_previsione(quantita_numeri):
+def elabora_previsione_deterministica(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 37  # Ciclo standard di 37 estrazioni
-    
-    if len(archivio) < lookback:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per avviare la rete LSTM temporale!")
+    if len(archivio) == 0:
+        st.warning("L'archivio è vuoto. Scarica prima le estrazioni!")
         return
 
-    st.info(f"Archivio attuale: **{len(archivio)}** concorsi. Addestramento rete LSTM temporale (Lookback: {lookback}) in corso...")
+    st.info(f"Analisi deterministica in corso su **{len(archivio)}** estrazioni registrate...")
 
-    # Conversione dell'archivio in matrice binaria Multi-Hot (90 elementi)
-    num_estrazioni = len(archivio)
-    binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
+    # Inizializziamo i contatori per ciascuno dei 90 numeri (1-90)
+    frequenze = np.zeros(91, dtype=int)
+    ultimo_indice = np.full(91, -1, dtype=int)
+
+    # Scansione completa dell'archivio (Brute-force statistico)
+    tot_concorsi = len(archivio)
     for idx, ext in enumerate(archivio):
         for n in ext:
             if 1 <= n <= 90:
-                binary_matrix[idx, n - 1] = 1.0
+                frequenze[n] += 1
+                ultimo_indice[n] = idx  # Memorizza l'ultima apparizione
 
-    # Preparazione dei dataset per le sequenze temporali
-    X_list, y_list = [], []
-    for i in range(len(binary_matrix) - lookback):
-        X_list.append(binary_matrix[i : i + lookback])
-        y_list.append(binary_matrix[i + lookback])
+    # Calcolo del ritardo attuale (distanza dall'ultima apparizione)
+    ritardi = np.zeros(91, dtype=int)
+    for i in range(1, 91):
+        if ultimo_indice[i] == -1:
+            ritardi[i] = tot_concorsi
+        else:
+            ritardi[i] = tot_concorsi - 1 - ultimo_indice[i]
 
-    X = torch.tensor(np.array(X_list), dtype=torch.float32)
-    y = torch.tensor(np.array(y_list), dtype=torch.float32)
+    # Assegnazione di un punteggio matematico fisso basato su frequenza e ritardo
+    # Regola fissa: premiamo i numeri con buon equilibrio tra presenza e assenza recente
+    punteggi = []
+    for i in range(1, 91):
+        # Score calcolato in modo totalmente deterministico
+        score = (frequenze[i] * 0.4) + (ritardi[i] * 0.6)
+        punteggi.append({'numero': i, 'score': score})
 
-    # Inizializzazione e Training del Modello LSTM
-    model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Ordinamento rigoroso decrescente per punteggio (nessun fattore casuale)
+    punteggi.sort(key=lambda x: x['score'], reverse=True)
 
-    model.train()
-    epochs = 40
-    for epoch in range(epochs):
-        optimizer.zero_grad()
-        logits = model(X)
-        loss = criterion(logits, y)
-        loss.backward()
-        optimizer.step()
-
-    # Estrazione dell'ultimo blocco temporale per la previsione del prossimo concorso
-    model.eval()
-    with torch.no_grad():
-        ultimi_passi = binary_matrix[-lookback:]
-        input_tensor = torch.tensor(ultimi_passi, dtype=torch.float32).unsqueeze(0)
-        logits_pred = model(input_tensor)
-        probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
-
-    # Classificazione dei numeri in base al punteggio di probabilità della rete
-    valutazioni = [{'numero': i + 1, 'score': probs[i]} for i in range(90)]
-    valutazioni.sort(key=lambda x: x['score'], reverse=True)
-
-    migliori = [item['numero'] for item in valutazioni[:quantita_numeri]]
+    migliori = [item['numero'] for item in punteggi[:quantita_numeri]]
     migliori.sort()
 
-    st.success("Previsione LSTM completata con successo!")
-    st.markdown(f"### 🧠 GRUPPO CALDO PREVISTO ({quantita_numeri} NUMERI):")
+    st.success("Previsione analitica completata con successo!")
+    st.markdown(f"### 🧠 GRUPPO SELEZIONATO ({quantita_numeri} NUMERI):")
     
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    # Seleziona le prime coppie utili se il quantitativo lo consente
+    # Sviluppo geometrico fisso delle coppie (Ambi)
     if quantita_numeri >= 2:
-        from itertools import combinations
         coppie = list(combinations(migliori, 2))[:3]
-        st.markdown("#### 🎯 Sviluppo Coppie (Ambi Consigliati):")
+        st.markdown("#### 🎯 Sviluppo Coppie (Ambi Consigliati Stabili):")
         for i, c in enumerate(coppie, 1):
             st.text(f"• Giocata {i}: {c[0]:02d} - {c[1]:02d} (A massa pari)")
 
-    st.balloons()
-
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto PyTorch LSTM")
-st.write("Generatore sequenziale basato su reti LSTM per l'analisi temporale delle estrazioni.")
+st.title("🎲 Bot 10eLotto Deterministico")
+st.write("Generatore di previsioni basato su scansione analitica fissa dell'archivio (Zero casualità).")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-# Scelta della quantità di numeri da giocare
 quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
@@ -257,7 +214,7 @@ if opzione == "Scarica Web & Prendi Previsione":
                 
                 if salva_archivio(archivio):
                     st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} nuove estrazioni.")
-                    elabora_previsione(quantita)
+                    elabora_previsione_deterministica(quantita)
                 else:
                     st.error("Impossibile scrivere sul file di salvataggio.")
             else:
@@ -265,8 +222,8 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Elaborazione modello LSTM in corso..."):
-            elabora_previsione(quantita)
+        with st.spinner("Scansione analitica in corso..."):
+            elabora_previsione_deterministica(quantita)
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
