@@ -7,14 +7,14 @@ import numpy as np
 from itertools import combinations
 import streamlit as st
 
-# Configurazione della pagina per adattarsi bene ai dispositivi mobili
+# Configurazione della pagina per dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto Deterministico",
-    page_icon="🎲",
+    page_title="Bot 10eLotto Hot Trend",
+    page_icon="🔥",
     layout="centered"
 )
 
-# Percorso di salvataggio (compatibile con cloud e locale)
+# Percorso di salvataggio
 CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
@@ -123,7 +123,7 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# MOTORE ANALITICO DETERMINISTICO (ZERO CASUALITÀ)
+# MOTORE HOT TREND A BREVISSIMO TERMINE
 # ==========================================
 def elabora_previsione_deterministica(quantita_numeri):
     archivio = carica_archivio()
@@ -131,63 +131,50 @@ def elabora_previsione_deterministica(quantita_numeri):
         st.warning("L'archivio è vuoto. Scarica prima le estrazioni!")
         return
 
-    st.info(f"Analisi deterministica in corso su **{len(archivio)}** estrazioni registrate...")
+    # Prendiamo solo le ultime 5 estrazioni per catturare il trend immediato
+    ultime_estrazioni = archivio[-5:] if len(archivio) >= 5 else archivio
+    st.info(f"Analisi Hot Trend basata sulle ultime **{len(ultime_estrazioni)}** estrazioni...")
 
-    # Inizializziamo i contatori per ciascuno dei 90 numeri (1-90)
-    frequenze = np.zeros(91, dtype=int)
-    ultimo_indice = np.full(91, -1, dtype=int)
-
-    # Scansione completa dell'archivio (Brute-force statistico)
-    tot_concorsi = len(archivio)
-    for idx, ext in enumerate(archivio):
+    # Contiamo le frequenze solo nel brevissimo termine
+    frequenze_recenti = np.zeros(91, dtype=int)
+    for ext in ultime_estrazioni:
         for n in ext:
             if 1 <= n <= 90:
-                frequenze[n] += 1
-                ultimo_indice[n] = idx  # Memorizza l'ultima apparizione
+                frequenze_recenti[n] += 1
 
-    # Calcolo del ritardo attuale (distanza dall'ultima apparizione)
-    ritardi = np.zeros(91, dtype=int)
-    for i in range(1, 91):
-        if ultimo_indice[i] == -1:
-            ritardi[i] = tot_concorsi
-        else:
-            ritardi[i] = tot_concorsi - 1 - ultimo_indice[i]
-
-    # Assegnazione di un punteggio matematico fisso basato su frequenza e ritardo
-    # Regola fissa: premiamo i numeri con buon equilibrio tra presenza e assenza recente
     punteggi = []
     for i in range(1, 91):
-        # Score calcolato in modo totalmente deterministico
-        score = (frequenze[i] * 0.4) + (ritardi[i] * 0.6)
+        # Il punteggio è dato unicamente da quante volte è uscito nelle ultime 5 estrazioni
+        score = frequenze_recenti[i]
         punteggi.append({'numero': i, 'score': score})
 
-    # Ordinamento rigoroso decrescente per punteggio (nessun fattore casuale)
+    # Ordinamento decrescente per frequenza recente
     punteggi.sort(key=lambda x: x['score'], reverse=True)
 
     migliori = [item['numero'] for item in punteggi[:quantita_numeri]]
     migliori.sort()
 
-    st.success("Previsione analitica completata con successo!")
-    st.markdown(f"### 🧠 GRUPPO SELEZIONATO ({quantita_numeri} NUMERI):")
+    st.success("Previsione Hot Trend completata!")
+    st.markdown(f"### 🔥 GRUPPO CALDO ({quantita_numeri} NUMERI):")
     
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    # Sviluppo geometrico fisso delle coppie (Ambi)
+    # Sviluppo delle coppie dinamiche
     if quantita_numeri >= 2:
         coppie = list(combinations(migliori, 2))[:3]
-        st.markdown("#### 🎯 Sviluppo Coppie (Ambi Consigliati Stabili):")
+        st.markdown("#### 🎯 Coppie Dinamiche Consigliate:")
         for i, c in enumerate(coppie, 1):
             st.text(f"• Giocata {i}: {c[0]:02d} - {c[1]:02d} (A massa pari)")
 
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto Deterministico")
-st.write("Generatore di previsioni basato su scansione analitica fissa dell'archivio (Zero casualità).")
+st.title("🔥 Bot 10eLotto Hot Trend")
+st.write("Generatore basato sul trend immediato delle ultimissime estrazioni (Zero ritardi passivi).")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=2)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -222,7 +209,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Scansione analitica in corso..."):
+        with st.spinner("Analisi trend in corso..."):
             elabora_previsione_deterministica(quantita)
 
 elif opzione == "Visualizza Archivio":
