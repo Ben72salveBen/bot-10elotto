@@ -12,11 +12,12 @@ import torch.nn as nn
 import torch.optim as optim
 
 st.set_page_config(
-    page_title="Bot 10eLotto - Doppia Strategia & Cassa",
+    page_title="Bot 10eLotto - Doppia Strategia",
     page_icon="⚡",
     layout="centered"
 )
 
+# Percorso stabile per il salvataggio dell'archivio
 CARTELLA_DOCUMENTI = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
 NOME_FILE = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
 
@@ -25,9 +26,16 @@ def carica_archivio():
         try:
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                return [sorted([int(n) for n in ext]) for ext in archivio if len(ext) >= 10]
+                # Converte e pulisce ogni estrazione per evitare errori di formato
+                archivio_pulito = []
+                for ext in archivio:
+                    if isinstance(ext, list) and len(ext) >= 10:
+                        nums = sorted([int(n) for n in ext if str(n).isdigit() and 1 <= int(n) <= 90])
+                        if len(nums) >= 10:
+                            archivio_pulito.append(nums)
+                return archivio_pulito
         except Exception as e:
-            st.error(f"Errore lettura archivio: {e}")
+            st.error(f"Errore nella lettura dell'archivio salvato: {e}")
     return []
 
 def salva_archivio(archivio):
@@ -36,7 +44,7 @@ def salva_archivio(archivio):
             json.dump(archivio, f, ensure_ascii=False, indent=4)
         return True
     except Exception as e:
-        st.error(f"Errore salvataggio: {e}")
+        st.error(f"Errore nel salvataggio dell'archivio: {e}")
         return False
 
 def scarica_estrazioni_con_bypass():
@@ -88,10 +96,12 @@ def scarica_estrazioni_con_bypass():
             estrazioni_trovate.sort(key=lambda x: x['id'])
             return [item['numeri'] for item in estrazioni_trovate]
     except Exception as e:
-        st.error(f"Errore di connessione: {e}")
+        st.error(f"Errore di connessione durante lo scaricamento: {e}")
         return []
 
-# Calcolo Sollecitazione
+# ==========================================
+# STRATEGIA 1: INDICE DI SOLLECITAZIONE
+# ==========================================
 def calcola_sollecitazione(archivio, quantita):
     tot_estrazioni = len(archivio)
     freq_globale = Counter()
@@ -120,7 +130,9 @@ def calcola_sollecitazione(archivio, quantita):
     numeri_ordinati = sorted(punteggi.items(), key=lambda x: x[1], reverse=True)
     return sorted([int(item[0]) for item in numeri_ordinati[:quantita]])
 
-# Calcolo PyTorch Gruppi
+# ==========================================
+# STRATEGIA 2: PYTORCH OTTIMIZZATORE GRUPPI
+# ==========================================
 class LottoGroupOptimizer(nn.Module):
     def __init__(self):
         super(LottoGroupOptimizer, self).__init__()
@@ -179,8 +191,12 @@ def calcola_pytorch_gruppi(archivio, quantita):
         
     return sorted([int(n) for n in tutte_comb[best_idx]])
 
-# Interfaccia Streamlit
+# ==========================================
+# INTERFACCIA WEB (STREAMLIT)
+# ==========================================
 st.title("⚡ Bot 10eLotto - Doppia Strategia")
+
+# Caricamento iniziale dell'archivio salvato
 archivio = carica_archivio()
 
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio))
@@ -188,15 +204,19 @@ st.sidebar.markdown("---")
 
 if st.sidebar.button("Sincronizza Archivio da Web"):
     with st.spinner("Scaricamento estrazioni..."):
-        estrazioni = scarica_estrazioni_con_bypass()
-        if estrazioni:
+        estrazioni_nuove = scarica_estrazioni_con_bypass()
+        if estrazioni_nuove:
             set_esistenti = {tuple(ext) for ext in archivio}
             aggiunte = 0
-            for ext in estrazioni:
+            for ext in estrazioni_nuove:
                 if tuple(ext) not in set_esistenti:
-                    archivio.append(ext); aggiunte += 1
-            salva_archivio(archivio)
-            st.success(f"Archivio aggiornato! Aggiunte {aggiunte} estrazioni.")
+                    archivio.append(ext)
+                    aggiunte += 1
+            if aggiunte > 0:
+                salva_archivio(archivio)
+                st.success(f"Archivio aggiornato! Aggiunte {aggiunte} nuove estrazioni.")
+            else:
+                st.info("L'archivio è già aggiornato con le ultime estrazioni.")
         else:
             st.error("Impossibile scaricare dal web.")
 
@@ -207,7 +227,7 @@ if strategia_scelta == "📈 Indice di Sollecitazione":
     st.subheader("📈 Strategia 1: Indice di Sollecitazione")
     if st.button("Genera Previsione Sollecitata", type="primary"):
         if len(archivio) < 5:
-            st.warning("Carica prima l'archivio dal menu laterale!")
+            st.warning("Carica prima l'archivio dal menu laterale o sincronizzalo!")
         else:
             numeri = calcola_sollecitazione(archivio, quantita_numeri)
             st.success("Previsione pronta:")
@@ -216,7 +236,7 @@ else:
     st.subheader("🔥 Strategia 2: PyTorch Neurale (Gruppi)")
     if st.button("Avvia Ottimizzazione PyTorch", type="primary"):
         if len(archivio) < 5:
-            st.warning("Carica prima l'archivio dal menu laterale!")
+            st.warning("Carica prima l'archivio dal menu laterale o sincronizzalo!")
         else:
             numeri = calcola_pytorch_gruppi(archivio, quantita_numeri)
             st.success("Combinazione ottimizzata pronta:")
