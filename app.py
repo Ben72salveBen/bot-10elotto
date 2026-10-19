@@ -3,13 +3,13 @@ import json
 import re
 import urllib.request
 import ssl
-from collections import Counter
+from collections import defaultdict
 from itertools import combinations
 import streamlit as st
 
 # Configurazione della pagina per dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto Ambi Frequenti (10 Colpi)",
+    page_title="Bot 10eLotto Due Ambi Recenti",
     page_icon="🎯",
     layout="centered"
 )
@@ -118,14 +118,17 @@ def scarica_estrazioni_con_bypass():
             estrazioni_trovate.sort(key=lambda x: x['id'])
             return [item['numeri'] for item in estrazioni_trovate]
 
+    default:
+        return []
+
     except Exception as e:
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
 # ==========================================
-# MOTORE ANALISI AMBI ULTIME 10 ESTRAZIONI
+# MOTORE DUE AMBI (ULTIME 10 ESTRAZIONI)
 # ==========================================
-def elabora_previsione_ambi():
+def elabora_previsione_due_ambi():
     archivio = carica_archivio()
     if len(archivio) == 0:
         st.warning("L'archivio è vuoto. Scarica prima le estrazioni!")
@@ -133,35 +136,45 @@ def elabora_previsione_ambi():
 
     # Prendiamo rigorosamente le ultime 10 estrazioni
     ultime_10 = archivio[-10:] if len(archivio) >= 10 else archivio
-    st.info(f"Analisi delle coppie (ambi) in corso sulle ultime **{len(ultime_10)}** estrazioni...")
+    st.info(f"Analisi in corso sulle ultime **{len(ultime_10)}** estrazioni...")
 
-    # Contatore per tracciare la frequenza di comparsa degli ambi nelle 10 estrazioni
-    contatore_ambi = Counter()
+    frequenze = defaultdict(int)
+    ultima_apparizione = {}
 
-    for ext in ultime_10:
-        # Generiamo tutte le possibili coppie (ambi) presenti in questa estrazione
-        ambi_estrazione = combinations(ext, 2)
-        for ambo in ambi_estrazione:
-            # Ordiniamo la tupla per evitare duplicati invertiti (es. 10-20 è uguale a 20-10)
-            ambo_ordinato = tuple(sorted(ambo))
-            contatore_ambi[ambo_ordinato] += 1
+    # Scandiamo le ultime 10 estrazioni tenendo traccia della frequenza e dell'indice di comparsa (più alto = più recente)
+    for idx_estrazione, ext in enumerate(ultime_10):
+        for ambo in combinations(ext, 2):
+            ambo_ord = tuple(sorted(ambo))
+            frequenze[ambo_ord] += 1
+            # Memorizziamo l'indice dell'estrazione più recente in cui è comparso
+            ultima_apparizione[ambo_ord] = idx_estrazione
 
-    # Troviamo gli ambi più frequenti in questa finestra
-    ambi_piu_frequenti = contatore_ambi.most_common(5)
-
-    if not ambi_piu_frequenti:
+    if not frequenze:
         st.warning("Nessun ambo rilevato nelle ultime estrazioni.")
         return
 
-    st.success("Analisi completata con successo!")
-    st.markdown("### 🎯 TOP AMBI PIÙ FREQUENTI (Ultime 10 estrazioni):")
+    # Ordinamento:
+    # 1. Frequenza decrescente (chi è uscito più volte)
+    # 2. In caso di parità, indice di apparizione più recente decrescente (chi è uscito nell'estrazione più vicina alla fine)
+    ambi_ordinati = sorted(
+        frequenze.keys(),
+        key=lambda ambo: (frequenze[ambo], ultima_apparizione[ambo]),
+        reverse=True
+    )
+
+    # Prendiamo i primi 2 ambi migliori
+    migliori_due = ambi_ordinati[:2]
+
+    st.success("Previsione completata!")
+    st.markdown("### 🎯 LE 2 COPPIE SCELTE DA GIOCARE:")
     
-    for i, (ambo, conteggio) in enumerate(ambi_piu_frequenti, 1):
-        st.markdown(f"**Giocata {i}:** ` {ambo[0]:02d} - {ambo[1]:02d} ` (Presente in {conteggio} estrazioni su {len(ultime_10)})")
+    for i, ambo in enumerate(migliori_due, 1):
+        freq = frequenze[ambo]
+        st.markdown(f"**Giocata {i}:** ` {ambo[0]:02d} - {ambo[1]:02d} ` (Frequenza: {freq} volte nelle ultime 10)")
 
 # Interfaccia grafica della Web App
-st.title("🎯 Bot 10eLotto Ambi Frequenti")
-st.write("Analisi diretta degli ambi con maggiore comparsa nelle ultime 10 estrazioni.")
+st.title("🎯 Bot 10eLotto Due Ambi Recenti")
+st.write("Generatore delle 2 coppie più calde basate sulle ultime 10 estrazioni (con priorità alla comparsa più recente).")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -191,16 +204,16 @@ if opzione == "Scarica Web & Prendi Previsione":
                 
                 if salva_archivio(archivio):
                     st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} nuove estrazioni.")
-                    elabora_previsione_ambi()
+                    elabora_previsione_due_ambi()
                 else:
                     st.error("Impossibile scrivere sul file di salvataggio.")
             else:
                 st.error("Nessuna estrazione valida trovata dal web.")
 
 elif opzione == "Genera Previsione":
-    if st.button("Genera Ambi da Archivio", type="primary"):
-        with st.spinner("Scansione ambi in corso..."):
-            elabora_previsione_ambi()
+    if st.button("Genera 2 Ambi da Archivio", type="primary"):
+        with st.spinner("Analisi in corso..."):
+            elabora_previsione_due_ambi()
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
