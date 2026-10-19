@@ -11,14 +11,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# Configurazione della pagina per dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto - Doppia Strategia",
+    page_title="Bot 10eLotto - Doppia Strategia & Cassa",
     page_icon="⚡",
     layout="centered"
 )
 
-# Percorso di salvataggio sicuro locale nella cartella corrente o home
 CARTELLA_DOCUMENTI = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
 NOME_FILE = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
 
@@ -27,10 +25,9 @@ def carica_archivio():
         try:
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) >= 10]
-                return archivio_ordinato
+                return [sorted([int(n) for n in ext]) for ext in archivio if len(ext) >= 10]
         except Exception as e:
-            st.error(f"Errore nella lettura del file di archivio: {e}")
+            st.error(f"Errore lettura archivio: {e}")
     return []
 
 def salva_archivio(archivio):
@@ -39,7 +36,7 @@ def salva_archivio(archivio):
             json.dump(archivio, f, ensure_ascii=False, indent=4)
         return True
     except Exception as e:
-        st.error(f"Errore salvataggio su file: {e}")
+        st.error(f"Errore salvataggio: {e}")
         return False
 
 def scarica_estrazioni_con_bypass():
@@ -91,12 +88,10 @@ def scarica_estrazioni_con_bypass():
             estrazioni_trovate.sort(key=lambda x: x['id'])
             return [item['numeri'] for item in estrazioni_trovate]
     except Exception as e:
-        st.error(f"Errore di connessione durante lo scraping: {e}")
+        st.error(f"Errore di connessione: {e}")
         return []
 
-# ==========================================
-# METODO 1: INDICE DI SOLLECITAZIONE (STATISTICA)
-# ==========================================
+# Calcolo Sollecitazione
 def calcola_sollecitazione(archivio, quantita):
     tot_estrazioni = len(archivio)
     freq_globale = Counter()
@@ -123,12 +118,9 @@ def calcola_sollecitazione(archivio, quantita):
         punteggi[n] = (z_score * 0.7) + (trend_storico * 0.3)
 
     numeri_ordinati = sorted(punteggi.items(), key=lambda x: x[1], reverse=True)
-    risultato = [int(item[0]) for item in numeri_ordinati[:quantita]]
-    return sorted(risultato)
+    return sorted([int(item[0]) for item in numeri_ordinati[:quantita]])
 
-# ==========================================
-# METODO 2: PYTORCH OTTIMIZZATORE DI GRUPPI (AFFINITA' / AMBI-TERZINE)
-# ==========================================
+# Calcolo PyTorch Gruppi
 class LottoGroupOptimizer(nn.Module):
     def __init__(self):
         super(LottoGroupOptimizer, self).__init__()
@@ -141,8 +133,7 @@ class LottoGroupOptimizer(nn.Module):
 def calcola_pytorch_gruppi(archivio, quantita):
     tot_estrazioni = len(archivio)
     if tot_estrazioni < 10:
-        fallback = list(range(1, quantita + 1))
-        return sorted([int(n) for n in fallback])
+        return sorted([int(n) for n in list(range(1, quantita + 1))])
 
     f_recenti = Counter()
     finestra = min(15, tot_estrazioni)
@@ -169,7 +160,6 @@ def calcola_pytorch_gruppi(archivio, quantita):
         features_list.append([float(co_rec), float(co_med), float(trend_comp)])
 
     x_tensor = torch.tensor(features_list, dtype=torch.float32)
-    
     model = LottoGroupOptimizer()
     optimizer = optim.Adam(model.parameters(), lr=0.05)
 
@@ -187,56 +177,16 @@ def calcola_pytorch_gruppi(archivio, quantita):
         final_scores = model(x_tensor)
         best_idx = torch.argmax(final_scores).item()
         
-    migliore_combinazione = [int(n) for n in tutte_comb[best_idx]]
-    return sorted(migliore_combinazione)
+    return sorted([int(n) for n in tutte_comb[best_idx]])
 
-# ==========================================
-# INTERFACCIA STREAMLIT PRINCIPALE
-# ==========================================
+# Interfaccia Streamlit
 st.title("⚡ Bot 10eLotto - Doppia Strategia")
-st.write("Analisi separata: Indice di Sollecitazione vs Ottimizzatore Neurale di Gruppi.")
-
 archivio = carica_archivio()
+
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio))
 st.sidebar.markdown("---")
 
-strategia_scelta = st.sidebar.radio(
-    "Scegli quale strategia consultare:",
-    ("📈 Indice di Sollecitazione", "🔥 PyTorch Neurale (Gruppi/Ambi)")
-)
-
-quantita_numeri = st.sidebar.slider("Quanti numeri vuoi giocare?", min_value=2, max_value=6, value=3, step=1)
-
-if strategia_scelta == "📈 Indice di Sollecitazione":
-    st.subheader("📈 Strategia 1: Indice di Sollecitazione")
-    st.write("Analisi statistica basata sullo scarto quadratico e frequenza recente.")
-    
-    if st.button("Genera Previsione Sollecitata", type="primary"):
-        if len(archivio) < 5:
-            st.warning("Carica prima qualche estrazione nell'archivio!")
-        else:
-            with st.spinner("Elaborazione in corso..."):
-                numeri = calcola_sollecitazione(archivio, quantita_numeri)
-                st.success("Previsione pronta!")
-                st.markdown(f"### 🎯 Numeri da giocare:")
-                st.markdown(f"## **` {', '.join([f'{n:02d}' for n in numeri])} `**")
-
-else:
-    st.subheader("🔥 Strategia 2: PyTorch Neurale (Affinità di Gruppo)")
-    st.write("Ottimizzazione basata sulle sinergie e co-frequenze di gruppo (Ambi/Terzine).")
-    
-    if st.button("Avvia Ottimizzazione PyTorch", type="primary"):
-        if len(archivio) < 5:
-            st.warning("Carica prima qualche estrazione nell'archivio!")
-        else:
-            with st.spinner("Addestramento reti neurali in corso..."):
-                numeri = calcola_pytorch_gruppi(archivio, quantita_numeri)
-                st.success("Ottimizzazione completata!")
-                st.markdown(f"### 🎯 Combinazione ottimizzata da PyTorch:")
-                st.markdown(f"## **` {', '.join([f'{n:02d}' for n in numeri])} `**")
-
-st.markdown("---")
-if st.button("Sincronizza Archivio da Web"):
+if st.sidebar.button("Sincronizza Archivio da Web"):
     with st.spinner("Scaricamento estrazioni..."):
         estrazioni = scarica_estrazioni_con_bypass()
         if estrazioni:
@@ -248,4 +198,26 @@ if st.button("Sincronizza Archivio da Web"):
             salva_archivio(archivio)
             st.success(f"Archivio aggiornato! Aggiunte {aggiunte} estrazioni.")
         else:
-            st.error("Impossibile scaricare dal web o archivio già aggiornato.")
+            st.error("Impossibile scaricare dal web.")
+
+strategia_scelta = st.radio("Seleziona Strategia:", ("📈 Indice di Sollecitazione", "🔥 PyTorch Neurale (Gruppi)"))
+quantita_numeri = st.slider("Quanti numeri vuoi giocare?", min_value=2, max_value=6, value=3, step=1)
+
+if strategia_scelta == "📈 Indice di Sollecitazione":
+    st.subheader("📈 Strategia 1: Indice di Sollecitazione")
+    if st.button("Genera Previsione Sollecitata", type="primary"):
+        if len(archivio) < 5:
+            st.warning("Carica prima l'archivio dal menu laterale!")
+        else:
+            numeri = calcola_sollecitazione(archivio, quantita_numeri)
+            st.success("Previsione pronta:")
+            st.markdown(f"## **` {', '.join([f'{n:02d}' for n in numeri])} `**")
+else:
+    st.subheader("🔥 Strategia 2: PyTorch Neurale (Gruppi)")
+    if st.button("Avvia Ottimizzazione PyTorch", type="primary"):
+        if len(archivio) < 5:
+            st.warning("Carica prima l'archivio dal menu laterale!")
+        else:
+            numeri = calcola_pytorch_gruppi(archivio, quantita_numeri)
+            st.success("Combinazione ottimizzata pronta:")
+            st.markdown(f"## **` {', '.join([f'{n:02d}' for n in numeri])} `**")
