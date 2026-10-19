@@ -118,9 +118,6 @@ def scarica_estrazioni_con_bypass():
             estrazioni_trovate.sort(key=lambda x: x['id'])
             return [item['numeri'] for item in estrazioni_trovate]
 
-    default:
-        return []
-
     except Exception as e:
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
@@ -141,7 +138,7 @@ def elabora_previsione_due_ambi():
     frequenze = defaultdict(int)
     ultima_apparizione = {}
 
-    # Scandiamo le ultime 10 estrazioni tenendo traccia della frequenza e dell'indice di comparsa (più alto = più recente)
+    # Scandiamo le ultime 10 estrazioni tenendo traccia della frequenza e dell'indice di comparsa
     for idx_estrazione, ext in enumerate(ultime_10):
         for ambo in combinations(ext, 2):
             ambo_ord = tuple(sorted(ambo))
@@ -155,7 +152,7 @@ def elabora_previsione_due_ambi():
 
     # Ordinamento:
     # 1. Frequenza decrescente (chi è uscito più volte)
-    # 2. In caso di parità, indice di apparizione più recente decrescente (chi è uscito nell'estrazione più vicina alla fine)
+    # 2. In caso di parità, indice di apparizione più recente decrescente
     ambi_ordinati = sorted(
         frequenze.keys(),
         key=lambda ambo: (frequenze[ambo], ultima_apparizione[ambo]),
