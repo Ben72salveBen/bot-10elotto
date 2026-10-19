@@ -3,14 +3,14 @@ import json
 import re
 import urllib.request
 import ssl
-import numpy as np
+from collections import Counter
 from itertools import combinations
 import streamlit as st
 
 # Configurazione della pagina per dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto Hot Trend",
-    page_icon="🔥",
+    page_title="Bot 10eLotto Ambi Frequenti (10 Colpi)",
+    page_icon="🎯",
     layout="centered"
 )
 
@@ -123,58 +123,48 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# MOTORE HOT TREND A BREVISSIMO TERMINE
+# MOTORE ANALISI AMBI ULTIME 10 ESTRAZIONI
 # ==========================================
-def elabora_previsione_deterministica(quantita_numeri):
+def elabora_previsione_ambi():
     archivio = carica_archivio()
     if len(archivio) == 0:
         st.warning("L'archivio è vuoto. Scarica prima le estrazioni!")
         return
 
-    # Prendiamo solo le ultime 5 estrazioni per catturare il trend immediato
-    ultime_estrazioni = archivio[-5:] if len(archivio) >= 5 else archivio
-    st.info(f"Analisi Hot Trend basata sulle ultime **{len(ultime_estrazioni)}** estrazioni...")
+    # Prendiamo rigorosamente le ultime 10 estrazioni
+    ultime_10 = archivio[-10:] if len(archivio) >= 10 else archivio
+    st.info(f"Analisi delle coppie (ambi) in corso sulle ultime **{len(ultime_10)}** estrazioni...")
 
-    # Contiamo le frequenze solo nel brevissimo termine
-    frequenze_recenti = np.zeros(91, dtype=int)
-    for ext in ultime_estrazioni:
-        for n in ext:
-            if 1 <= n <= 90:
-                frequenze_recenti[n] += 1
+    # Contatore per tracciare la frequenza di comparsa degli ambi nelle 10 estrazioni
+    contatore_ambi = Counter()
 
-    punteggi = []
-    for i in range(1, 91):
-        # Il punteggio è dato unicamente da quante volte è uscito nelle ultime 5 estrazioni
-        score = frequenze_recenti[i]
-        punteggi.append({'numero': i, 'score': score})
+    for ext in ultime_10:
+        # Generiamo tutte le possibili coppie (ambi) presenti in questa estrazione
+        ambi_estrazione = combinations(ext, 2)
+        for ambo in ambi_estrazione:
+            # Ordiniamo la tupla per evitare duplicati invertiti (es. 10-20 è uguale a 20-10)
+            ambo_ordinato = tuple(sorted(ambo))
+            contatore_ambi[ambo_ordinato] += 1
 
-    # Ordinamento decrescente per frequenza recente
-    punteggi.sort(key=lambda x: x['score'], reverse=True)
+    # Troviamo gli ambi più frequenti in questa finestra
+    ambi_piu_frequenti = contatore_ambi.most_common(5)
 
-    migliori = [item['numero'] for item in punteggi[:quantita_numeri]]
-    migliori.sort()
+    if not ambi_piu_frequenti:
+        st.warning("Nessun ambo rilevato nelle ultime estrazioni.")
+        return
 
-    st.success("Previsione Hot Trend completata!")
-    st.markdown(f"### 🔥 GRUPPO CALDO ({quantita_numeri} NUMERI):")
+    st.success("Analisi completata con successo!")
+    st.markdown("### 🎯 TOP AMBI PIÙ FREQUENTI (Ultime 10 estrazioni):")
     
-    numeri_str = " - ".join(map(str, migliori))
-    st.markdown(f"## **` {numeri_str} `**")
-    
-    # Sviluppo delle coppie dinamiche
-    if quantita_numeri >= 2:
-        coppie = list(combinations(migliori, 2))[:3]
-        st.markdown("#### 🎯 Coppie Dinamiche Consigliate:")
-        for i, c in enumerate(coppie, 1):
-            st.text(f"• Giocata {i}: {c[0]:02d} - {c[1]:02d} (A massa pari)")
+    for i, (ambo, conteggio) in enumerate(ambi_piu_frequenti, 1):
+        st.markdown(f"**Giocata {i}:** ` {ambo[0]:02d} - {ambo[1]:02d} ` (Presente in {conteggio} estrazioni su {len(ultime_10)})")
 
 # Interfaccia grafica della Web App
-st.title("🔥 Bot 10eLotto Hot Trend")
-st.write("Generatore basato sul trend immediato delle ultimissime estrazioni (Zero ritardi passivi).")
+st.title("🎯 Bot 10eLotto Ambi Frequenti")
+st.write("Analisi diretta degli ambi con maggiore comparsa nelle ultime 10 estrazioni.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=2)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -201,16 +191,16 @@ if opzione == "Scarica Web & Prendi Previsione":
                 
                 if salva_archivio(archivio):
                     st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} nuove estrazioni.")
-                    elabora_previsione_deterministica(quantita)
+                    elabora_previsione_ambi()
                 else:
                     st.error("Impossibile scrivere sul file di salvataggio.")
             else:
                 st.error("Nessuna estrazione valida trovata dal web.")
 
 elif opzione == "Genera Previsione":
-    if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Analisi trend in corso..."):
-            elabora_previsione_deterministica(quantita)
+    if st.button("Genera Ambi da Archivio", type="primary"):
+        with st.spinner("Scansione ambi in corso..."):
+            elabora_previsione_ambi()
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
