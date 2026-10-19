@@ -3,14 +3,17 @@ import json
 import re
 import urllib.request
 import ssl
-from collections import defaultdict
-from itertools import combinations
+import math
+from collections import Counter
 import streamlit as st
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 # Configurazione della pagina per dispositivi mobili
 st.set_page_config(
-    page_title="Bot 10eLotto Due Ambi Recenti",
-    page_icon="🎯",
+    page_title="Bot 10eLotto Multi-Sistema",
+    page_icon="⚡",
     layout="centered"
 )
 
@@ -123,73 +126,197 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# MOTORE DUE AMBI (ULTIME 10 ESTRAZIONI)
+# METODO 1: INDICE DI SOLLECITAZIONE (STATISTICA)
 # ==========================================
-def elabora_previsione_due_ambi():
-    archivio = carica_archivio()
-    if len(archivio) == 0:
-        st.warning("L'archivio è vuoto. Scarica prima le estrazioni!")
-        return
+def calcola_sollecitazione(archivio, quantita):
+    tot_estrazioni = len(archivio)
+    freq_globale = Counter()
+    for ext in archivio:
+        for n in ext: freq_globale[n] += 1
 
-    # Prendiamo rigorosamente le ultime 10 estrazioni
-    ultime_10 = archivio[-10:] if len(archivio) >= 10 else archivio
-    st.info(f"Analisi in corso sulle ultime **{len(ultime_10)}** estrazioni...")
+    finestra_corta = 15
+    ultime_15 = archivio[-finestra_corta:]
+    freq_recente = Counter()
+    for ext in ultime_15:
+        for n in ext: freq_recente[n] += 1
 
-    frequenze = defaultdict(int)
-    ultima_apparizione = {}
+    p = 20 / 90.0
+    media_attesa = finestra_corta * p
+    dev_std = math.sqrt(finestra_corta * p * (1 - p))
 
-    # Scandiamo le ultime 10 estrazioni tenendo traccia della frequenza e dell'indice di comparsa
-    for idx_estrazione, ext in enumerate(ultime_10):
-        for ambo in combinations(ext, 2):
-            ambo_ord = tuple(sorted(ambo))
-            frequenze[ambo_ord] += 1
-            # Memorizziamo l'indice dell'estrazione più recente in cui è comparso
-            ultima_apparizione[ambo_ord] = idx_estrazione
+    punteggi = {}
+    for n in range(1, 91):
+        f_rec = freq_recente[n]
+        z_score = (f_rec - media_attesa) / dev_std
+        f_globale = freq_globale[n]
+        media_globale_attesa = tot_estrazioni * p
+        trend_storico = (f_globale - media_globale_attesa) / math.sqrt(tot_estrazioni * p * (1 - p))
+        indice = (z_score * 0.7) + (trend_storico * 0.3)
+        punteggi[n] = (indice, f_rec, f_globale)
 
-    if not frequenze:
-        st.warning("Nessun ambo rilevato nelle ultime estrazioni.")
-        return
+    numeri_ordinati = sorted(punteggi.items(), key=lambda x: x[1][0], reverse=True)
+    top_numeri = sorted([item[0] for item in numeri_ordinati[:quantita]])
+    return top_numeri, punteggi
 
-    # Ordinamento:
-    # 1. Frequenza decrescente (chi è uscito più volte)
-    # 2. In caso di parità, indice di apparizione più recente decrescente
-    ambi_ordinati = sorted(
-        frequenze.keys(),
-        key=lambda ambo: (frequenze[ambo], ultima_apparizione[ambo]),
-        reverse=True
-    )
+# ==========================================
+# METODO 2: OTTIMIZZATORE NEURALE PYTORCH
+# ==========================================
+class LottoOptimizerNet(nn.Module):
+    def __init__(self):
+        super(LottoOptimizerNet, self).__init__()
+        self.weights = nn.Parameter(torch.randn(3, 1, dtype=torch.float32) * 0.1)
+        self.bias = nn.Parameter(torch.zeros(1, dtype=torch.float32))
 
-    # Prendiamo i primi 2 ambi migliori
-    migliori_due = ambi_ordinati[:2]
+    def forward(self, x):
+        return torch.matmul(x, self.weights).squeeze() + self.bias
 
-    st.success("Previsione completata!")
-    st.markdown("### 🎯 LE 2 COPPIE SCELTE DA GIOCARE:")
+def estrai_features(archivio, idx_corrente):
+    storico = archivio[:idx_corrente]
+    f_5, f_15, f_tot = Counter(), Counter(), Counter()
+    for ext in storico[-5:]: 
+        for n in ext: f_5[n] += 1
+    for ext in storico[-15:]: 
+        for n in ext: f_15[n] += 1
+    for ext in storico: 
+        for n in ext: f_tot[n] += 1
+        
+    tot = len(storico)
+    p = 20.0 / 90.0
+    features = []
+    for n in range(1, 91):
+        v5 = f_5[n] / 5.0
+        v15 = f_15[n] / 15.0
+        v_storico = (f_tot[n] - (tot * p)) / (math.sqrt(tot * p * (1 - p)) + 1e-5)
+        features.append([v5, v15, v_storico])
+    return torch.tensor(features, dtype=torch.float32)
+
+def calcola_pytorch(archivio, quantita):
+    tot_estrazioni = len(archivio)
+    model = LottoOptimizerNet()
+    optimizer = optim.Adam(model.parameters(), lr=0.05)
+    finestra_train = min(50, tot_estrazioni - 20)
     
-    for i, ambo in enumerate(migliori_due, 1):
-        freq = frequenze[ambo]
-        st.markdown(f"**Giocata {i}:** ` {ambo[0]:02d} - {ambo[1]:02d} ` (Frequenza: {freq} volte nelle ultime 10)")
+    for epoch in range(120):
+        optimizer.zero_grad()
+        loss = 0.0
+        start_idx = tot_estrazioni - finestra_train
+        for idx in range(start_idx, tot_estrazioni - 1):
+            x = estrai_features(archivio, idx)
+            scores = model(x)
+            target_ext = archivio[idx]
+            target_tensor = torch.zeros(90, dtype=torch.float32)
+            for n in target_ext: target_tensor[n-1] = 1.0
+            probs = torch.sigmoid(scores)
+            bce_loss = -(target_tensor * torch.log(probs + 1e-6) + (1 - target_tensor) * torch.log(1 - probs + 1e-6)).mean()
+            loss = loss + bce_loss
+        loss = loss / finestra_train
+        loss.backward()
+        optimizer.step()
 
-# Interfaccia grafica della Web App
-st.title("🎯 Bot 10eLotto Due Ambi Recenti")
-st.write("Generatore delle 2 coppie più calde basate sulle ultime 10 estrazioni (con priorità alla comparsa più recente).")
+    model.eval()
+    with torch.no_grad():
+        x_current = estrai_features(archivio, tot_estrazioni)
+        final_scores = torch.sigmoid(model(x_current))
+        
+    _, indici = torch.sort(final_scores, descending=True)
+    top_numeri = sorted([int(indici[i].item()) + 1 for i in range(quantita)])
+    pesi = model.weights.detach().numpy().flatten()
+    return top_numeri, pesi
 
-archivio_corrente = carica_archivio()
-st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
+# ==========================================
+# INTERFACCIA STREAMLIT
+# ==========================================
+st.title("⚡ Bot 10eLotto Multi-Sistema")
+st.write("Scegli il motore di calcolo o confronta le previsioni in tempo reale.")
+
+archivio = carica_archivio()
+st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio))
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
 
-opzione = st.sidebar.radio(
-    "Scegli un'azione:",
-    ("Genera Previsione", "Scarica Web & Prendi Previsione", "Visualizza Archivio", "Svuota Archivio")
+scelta_sistema = st.sidebar.radio(
+    "Seleziona Modalità:",
+    (
+        "📈 Indice di Sollecitazione", 
+        "🔥 Ottimizzatore PyTorch", 
+        "⚔️ Confronto Entrambi i Sistemi",
+        "📥 Sincronizza da Web", 
+        "📁 Visualizza Archivio", 
+        "🗑️ Svuota Archivio"
+    )
 )
 
-if opzione == "Scarica Web & Prendi Previsione":
+# Slider dinamico per scegliere quanti numeri generare (da 2 a 6)
+st.sidebar.markdown("---")
+quantita_numeri = st.sidebar.slider("Quanti numeri vuoi giocare?", min_value=2, max_value=6, value=3, step=1)
+
+# ESECUZIONE AZIONI
+if scelta_sistema == "📈 Indice di Sollecitazione":
+    if st.button("Calcola Previsione Sollecitata", type="primary"):
+        if len(archivio) < 20:
+            st.warning("Servono almeno 20 estrazioni nell'archivio!")
+        else:
+            with st.spinner("Analisi statistica in corso..."):
+                top, dettagli = calcola_sollecitazione(archivio, quantita_numeri)
+                st.success("Previsione completata!")
+                st.markdown(f"### 📈 PREVISIONE INDICE DI SOLLECITAZIONE ({quantita_numeri} NUMERI):")
+                st.markdown(f"## **` {', '.join([f'{n:02d}' for n in top])} `**")
+                
+                st.markdown("---")
+                st.markdown("#### 🔍 Dettaglio Valori:")
+                for n in top:
+                    ind, f_rec, f_glob = dettagli[n]
+                    st.write(f"- **Numero {n:02d}**: Indice Sollecitazione = `{ind:.2f}` (Ultime 15: {f_rec}, Totali: {f_glob})")
+
+elif scelta_sistema == "🔥 Ottimizzatore PyTorch":
+    if st.button("Avvia Training PyTorch & Predici", type="primary"):
+        if len(archivio) < 30:
+            st.warning("Servono almeno 30 estrazioni nell'archivio!")
+        else:
+            with st.spinner("Addestramento della rete neurale in corso..."):
+                top, pesi = calcola_pytorch(archivio, quantita_numeri)
+                st.success("Ottimizzazione completata!")
+                st.markdown(f"### 🔥 PREVISIONE NEURALE PYTORCH ({quantita_numeri} NUMERI):")
+                st.markdown(f"## **` {', '.join([f'{n:02d}' for n in top])} `**")
+                
+                st.markdown("---")
+                st.markdown("#### 🧠 Pesi Assegnati dal Modello:")
+                st.write(f"- Peso Trend Brevissimo (5 concorsi): `{pesi[0]:.3f}`")
+                st.write(f"- Peso Trend Medio (15 concorsi): `{pesi[1]:.3f}`")
+                st.write(f"- Peso Regolarità Storica: `{pesi[2]:.3f}`")
+
+elif scelta_sistema == "⚔️ Confronto Entrambi i Sistemi":
+    if st.button("Esegui Analisi Comparativa", type="primary"):
+        if len(archivio) < 30:
+            st.warning("Servono almeno 30 estrazioni per il confronto!")
+        else:
+            with st.spinner("Calcolo combinato in corso..."):
+                top_sol, _ = calcola_sollecitazione(archivio, quantita_numeri)
+                top_py, _ = calcola_pytorch(archivio, quantita_numeri)
+                
+                # Calcolo della convergenza
+                comuni = set(top_sol).intersection(set(top_py))
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("### 📈 Sollecitazione")
+                    st.markdown(f"### `{', '.join([f'{n:02d}' for n in top_sol])}`")
+                with col2:
+                    st.markdown("### 🔥 PyTorch")
+                    st.markdown(f"### `{', '.join([f'{n:02d}' for n in top_py])}`")
+                
+                st.markdown("---")
+                if comuni:
+                    st.success(f"🎯 **CONVERGENZA TROVATA!** I due sistemi concordano su questi numeri: **` {', '.join([f'{n:02d}' for n in sorted(list(comuni))])} `**")
+                else:
+                    st.info("I due sistemi hanno individuato numeri differenti. Puoi scegliere quale seguire o prendere 1 numero da ciascuno.")
+
+elif scelta_sistema == "📥 Sincronizza da Web":
     if st.button("Avvia Sincronizzazione Web", type="primary"):
         with st.spinner("Connessione a Lottologia in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
-                archivio = carica_archivio()
                 set_esistenti = {tuple(ext) for ext in archivio}
                 nuove_aggiunte = 0
                 for ext in estrazioni:
@@ -201,28 +328,21 @@ if opzione == "Scarica Web & Prendi Previsione":
                 
                 if salva_archivio(archivio):
                     st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} nuove estrazioni.")
-                    elabora_previsione_due_ambi()
                 else:
-                    st.error("Impossibile scrivere sul file di salvataggio.")
+                    st.error("Impossibile salvare l'archivio.")
             else:
-                st.error("Nessuna estrazione valida trovata dal web.")
+                st.error("Nessuna estrazione trovata.")
 
-elif opzione == "Genera Previsione":
-    if st.button("Genera 2 Ambi da Archivio", type="primary"):
-        with st.spinner("Analisi in corso..."):
-            elabora_previsione_due_ambi()
-
-elif opzione == "Visualizza Archivio":
+elif scelta_sistema == "📁 Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
-    archivio = carica_archivio()
     if len(archivio) == 0:
-        st.info("Nessuna estrazione presente nell'archivio.")
+        st.info("Nessuna estrazione salvata.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
             st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
 
-elif opzione == "Svuota Archivio":
-    st.warning("Attenzione: questa operazione cancellerà tutto l'archivio salvato.")
-    if st.button("Conferma Cancellazione Archivio", type="secondary"):
+elif scelta_sistema == "🗑️ Svuota Archivio":
+    st.warning("Vuoi cancellare tutto l'archivio salvato?")
+    if st.button("Conferma Cancellazione", type="secondary"):
         salva_archivio([])
-        st.success("Archivio pulito con successo.")
+        st.success("Archivio svuotato.")
