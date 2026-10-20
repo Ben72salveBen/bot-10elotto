@@ -1,12 +1,130 @@
+import os
+import json
+import re
+import urllib.request
+import ssl
+import math
+from itertools import combinations
+from collections import Counter
 import streamlit as st
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from collections import Counter
-from itertools import combinations
+
+st.set_page_config(
+    page_title="Bot 10eLotto - Hot3 MicroLottoNet",
+    page_icon="🔥",
+    layout="centered"
+)
+
+CARTELLA_DOCUMENTI = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else "."
+NOME_FILE = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
+NOME_STORICO = os.path.join(CARTELLA_DOCUMENTI, "storico_previsioni.json")
+
+def safe_rerun():
+    try:
+        st.rerun()
+    except AttributeError:
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
+
+def carica_archivio():
+    if os.path.exists(NOME_FILE):
+        try:
+            with open(NOME_FILE, "r", encoding="utf-8") as f:
+                archivio = json.load(f)
+                archivio_pulito = []
+                for ext in archivio:
+                    if isinstance(ext, list) and len(ext) >= 10:
+                        nums = sorted([int(n) for n in ext if str(n).isdigit() and 1 <= int(n) <= 90])
+                        if len(nums) >= 10:
+                            archivio_pulito.append(nums)
+                return archivio_pulito
+        except Exception as e:
+            st.error(f"Errore nella lettura dell'archivio salvato: {e}")
+    return []
+
+def salva_archivio(archivio):
+    try:
+        with open(NOME_FILE, "w", encoding="utf-8") as f:
+            json.dump(archivio, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception as e:
+        st.error(f"Errore nel salvataggio dell'archivio: {e}")
+        return False
+
+def carica_storico():
+    if os.path.exists(NOME_STORICO):
+        try:
+            with open(NOME_STORICO, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def salva_storico(storico):
+    try:
+        with open(NOME_STORICO, "w", encoding="utf-8") as f:
+            json.dump(storico, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
+def scarica_estrazioni_con_bypass():
+    url = "https://lottologia.com/10elotto5minuti/estrazioni"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.9',
+        'Connection': 'keep-alive',
+        'Referer': 'https://lottologia.com/'
+    }
+    req = urllib.request.Request(url, headers=headers)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            html = response.read().decode('utf-8', 'ignore')
+            if "Domande Frequenti" in html: html = html.split("Domande Frequenti")[0]
+            if "Seleziona Numeri" in html: html = html.split("Seleziona Numeri")[-1]
+            
+            estrazioni_trovate = []
+            blocchi = re.split(r'#(\d+)', html)
+            for i in range(1, len(blocchi), 2):
+                id_concorso = int(blocchi[i])
+                testo_blocco = blocchi[i+1]
+                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco: continue
+                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
+                if match_num:
+                    testo_sezione = match_num.group(1)
+                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    numeri_validi, visti = [], set()
+                    for p in pezzi_cifre:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti:
+                                    visti.add(sub); numeri_validi.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti:
+                                visti.add(val); numeri_validi.append(val)
+                        if len(numeri_validi) == 20: break
+                    if len(numeri_validi) >= 10:
+                        numeri_validi.sort()
+                        estrazioni_trovate.append({'id': id_concorso, 'numeri': numeri_validi})
+            if not estrazioni_trovate: return []
+            estrazioni_trovate.sort(key=lambda x: x['id'])
+            return [item['numeri'] for item in estrazioni_trovate]
+    except Exception as e:
+        st.error(f"Errore di connessione durante lo scaricamento: {e}")
+        return []
 
 # ==========================================
-# 1. ARCHITETTURA NEURALE PYTORCH (HOT 3)
+# ARCHITETTURA NEURALE PYTORCH (HOT 3)
 # ==========================================
 class MicroLottoNetHot3(nn.Module):
     def __init__(self, input_dim):
@@ -21,12 +139,13 @@ class MicroLottoNetHot3(nn.Module):
         return self.fc2(out).squeeze(-1)
 
 # ==========================================
-# 2. MOTORE DI CALCOLO SU ULTIME 3 ESTRAZIONI
+# MOTORE DI CALCOLO RIGOROSO SU ULTIME 3 ESTRAZIONI
 # ==========================================
 def calcola_previsione_hot3(archivio_completo, quantita):
     if len(archivio_completo) < 3:
         return [], 0.0, 0
     
+    # FOCUS ASSOLUTO SULLE ULTIME 3
     ultime_3 = archivio_completo[-3:]
     freq_3 = Counter()
     cadenze_3 = Counter()
@@ -98,6 +217,8 @@ def calcola_previsione_hot3(archivio_completo, quantita):
         best_idx = torch.argmax(final_scores).item()
         
     quartina_scelta = sorted([int(n) for n in tutte_comb[best_idx]])
+    
+    # Indice di Concentrazione (%)
     punti_totali_scia = sum(freq_3[n] for n in quartina_scelta)
     max_possibile = 3 * quantita
     concentrazione = min(100.0, round((punti_totali_scia / max_possibile) * 100, 1))
@@ -105,74 +226,106 @@ def calcola_previsione_hot3(archivio_completo, quantita):
     return quartina_scelta, concentrazione, cadenza_calda
 
 # ==========================================
-# 3. INTERFACCIA UTENTE STREAMLIT
+# INTERFACCIA WEB (STREAMLIT)
 # ==========================================
-st.set_page_config(page_title="10eLotto Bot PyTorch Hot3", layout="centered")
+st.title("🔥 Bot 10eLotto - Hot3 MicroLottoNet")
+st.caption("Focus rigoroso sulle ultime 3 estrazioni + Cadenze + Concentrazione + Tracciatore Esiti")
 
-st.title("🔥 Bot 10eLotto - Focus Ultime 3")
-st.caption("Micro-Rete PyTorch + Filtro Cadenze + Tracciatore Esiti")
+archivio = carica_archivio()
+storico = carica_storico()
 
-# Session state per archivio e storico previsioni
-if 'archivio' not in st.session_state:
-    st.session_state.archivio = []
-if 'storico_previsioni' not in st.session_state:
-    st.session_state.storico_previsioni = []
+st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio))
+st.sidebar.markdown("---")
 
-# Section Input Estrazioni
-st.subheader("1. Inserimento Nuova Estrazione")
-input_estrazione = st.text_input("Inserisci 20 numeri (separati da spazio o virgola):", placeholder="Es: 1 5 12 18 22 ...")
-
-if st.button("➕ Aggiungi Estrazione"):
-    try:
-        numeri = [int(n) for n in input_estrazione.replace(",", " ").split() if n.strip().isdigit()]
-        if len(numeri) == 20:
-            st.session_state.archivio.append(numeri)
-            
-            # Controllo automatico dell'ultima previsione in attesa
-            if st.session_state.storico_previsioni and st.session_state.storico_previsioni[-1]['esito'] is None:
-                ultima_prev = set(st.session_state.storico_previsioni[-1]['numeri'])
-                estratti_set = set(numeri)
-                punti = len(ultima_prev.intersection(estratti_set))
-                st.session_state.storico_previsioni[-1]['esito'] = punti
-                st.toast(f"Verifica completata per l'ultima previsione: {punti} Punti presi!", icon="🎯")
+# Sincronizzazione Web
+if st.sidebar.button("🔄 Sincronizza Archivio da Web"):
+    with st.spinner("Scaricamento estrazioni..."):
+        estrazioni_nuove = scarica_estrazioni_con_bypass()
+        if estrazioni_nuove:
+            set_esistenti = {tuple(ext) for ext in archivio}
+            aggiunte = 0
+            for ext in estrazioni_nuove:
+                if tuple(ext) not in set_esistenti:
+                    archivio.append(ext)
+                    aggiunte += 1
+            if aggiunte > 0:
+                salva_archivio(archivio)
                 
-            st.success(f"Estrazione aggiunta con successo! Totale in archivio: {len(st.session_state.archivio)}")
+                # Controllo automatico esito ultima previsione in sospeso
+                if storico and storico[-1]['esito'] is None:
+                    ultima_prev = set(storico[-1]['numeri'])
+                    ultima_estrazione_reale = set(archivio[-1])
+                    punti = len(ultima_prev.intersection(ultima_estrazione_reale))
+                    storico[-1]['esito'] = punti
+                    salva_storico(storico)
+                    st.toast(f"Verifica automatica completata: {punti} Punti presi!", icon="🎯")
+
+                st.success(f"Archivio aggiornato! Aggiunte {aggiunte} nuove estrazioni.")
+                safe_rerun()
+            else:
+                st.info("L'archivio è già aggiornato.")
         else:
-            st.error("Un'estrazione del 10eLotto deve contenere esattamente 20 numeri.")
-    except Exception as e:
-        st.error(f"Errore nell'inserimento: {e}")
+            st.error("Impossibile scaricare dal web.")
 
-# Info e Gestione Archivio
-col_arch1, col_arch2 = st.columns(2)
-with col_arch1:
-    st.info(f"📊 **Estrazioni in archivio:** {len(st.session_state.archivio)}")
-
-with col_arch2:
-    if len(st.session_state.archivio) >= 50:
-        if st.button("✂️ Resetta a 40 Estrazioni"):
-            st.session_state.archivio = st.session_state.archivio[-40:]
-            st.warning("Archivio tagliato: mantenute le ultime 40 estrazioni!")
-
-# Section Previsione
-st.subheader("2. Genera Previsione Bot")
-quantita_numeri = st.selectbox("Quanti numeri vuoi giocare?", [2, 3, 4, 5, 6], index=2)
-
-if st.button("🚀 Genera Previsione (Ultime 3 Estrazioni)"):
-    if len(st.session_state.archivio) < 3:
-        st.error("Servono almeno 3 estrazioni nell'archivio per calcolare la previsione!")
+# RESET / TRIMMING A 40 ESTRAZIONI (Regola d'oro quando si arriva a 50)
+if st.sidebar.button("✂️ Resetta a 40 Estrazioni"):
+    if len(archivio) > 40:
+        archivio = archivio[-40:]
+        salva_archivio(archivio)
+        st.sidebar.success("Archivio ridotto alle ultime 40 estrazioni!")
+        safe_rerun()
     else:
-        previsione, concentrazione, cadenza_calda = calcola_previsione_hot3(st.session_state.archivio, quantita_numeri)
+        st.sidebar.info("L'archivio ha già 40 o meno estrazioni.")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("💾 Gestione Backup Archivio")
+
+if archivio:
+    json_str = json.dumps(archivio, ensure_ascii=False, indent=4)
+    st.sidebar.download_button(
+        label="📥 Esporta Archivio (JSON)",
+        data=json_str,
+        file_name="archivio_lotto_backup.json",
+        mime="application/json"
+    )
+
+caricato_file = st.sidebar.file_uploader("📤 Importa Backup (JSON)", type=["json"])
+if caricato_file is not None:
+    try:
+        dati_caricati = json.load(caricato_file)
+        if isinstance(dati_caricati, list) and len(dati_caricati) > 0:
+            archivio = [sorted([int(n) for n in ext]) for ext in dati_caricati if len(ext) >= 10]
+            salva_archivio(archivio)
+            st.sidebar.success(f"Backup caricato con successo! ({len(archivio)} estrazioni)")
+            safe_rerun()
+        else:
+            st.sidebar.error("Il file caricato non è valido.")
+    except Exception as e:
+        st.sidebar.error(f"Errore nell'importazione: {e}")
+
+st.markdown("---")
+
+# Sezione Previsione
+st.subheader("🚀 Genera Previsione (Focus Ultime 3 Estrazioni)")
+quantita_numeri = st.slider("Quanti numeri vuoi giocare?", min_value=2, max_value=6, value=4, step=1)
+
+if st.button("🔥 Genera Previsione Hot3", type="primary"):
+    if len(archivio) < 3:
+        st.warning("Servono almeno 3 estrazioni in archivio! Sincronizza o importa i dati.")
+    else:
+        previsione, concentrazione, cadenza_calda = calcola_previsione_hot3(archivio, quantita_numeri)
         
         # Salviamo la previsione nello storico in attesa dell'estrazione successiva
-        st.session_state.storico_previsioni.append({
+        storico.append({
             'numeri': previsione,
             'concentrazione': concentrazione,
             'cadenza': cadenza_calda,
             'esito': None
         })
+        salva_storico(storico)
         
-        st.markdown("---")
-        st.markdown(f"### 🎯 Combinazione Consigliata: **{ ' - '.join(map(str, previsione)) }**")
+        st.success("Previsione ottimizzata pronta:")
+        st.markdown(f"## **` {', '.join([f'{n:02d}' for n in previsione])} `**")
         
         c1, c2 = st.columns(2)
         with c1:
@@ -181,25 +334,33 @@ if st.button("🚀 Genera Previsione (Ultime 3 Estrazioni)"):
             st.metric(label="🎯 Cadenza Calda", value=f"Finale {cadenza_calda}")
             
         if concentrazione >= 50.0:
-            st.success("🟢 **Scia rovente:** Buona convergenza sulle ultime 3 estrazioni.")
+            st.success("🟢 **Scia rovente:** Ottima convergenza sulle ultime 3 estrazioni.")
         else:
-            st.warning("🟡 **Scia debole:** Numeri frammentati. Valuta prudenza con l'Extra.")
+            st.warning("🟡 **Scia debole:** Numeri frammentati. Prudenza.")
 
-# Section Storico Previsioni
-if st.session_state.storico_previsioni:
-    st.subheader("3. Storico Previsioni e Verifiche")
-    with st.expander("📜 Registro delle Previsioni Inserite", expanded=True):
-        for idx, item in enumerate(reversed(st.session_state.storico_previsioni), 1):
-            str_num = " - ".join(map(str, item['numeri']))
-            esito_str = item['esito']
+# Sezione Storico e Verifiche
+if storico:
+    st.markdown("---")
+    st.subheader("📜 Storico Previsioni e Verifiche")
+    with st.expander("👁️ Visualizza Registro Esiti", expanded=True):
+        for idx, item in enumerate(reversed(storico), 1):
+            str_num = " - ".join([f"{n:02d}" for n in item['numeri']])
+            esito = item['esito']
             
-            if esito_str is None:
-                badge = "⏳ In attesa della prossima estrazione..."
-            elif esito_str >= 3:
-                badge = f"🔥 **{esito_str} PUNTI** (Vincita Importante!)"
-            elif esito_str == 2:
-                badge = f"🟢 **{esito_str} PUNTI** (Recupero / Ambo)"
+            if esito is None:
+                badge = "⏳ In attesa della prossima sincronizzazione..."
+            elif esito >= 3:
+                badge = f"🔥 **{esito} PUNTI** (TERNO / OTTIMO!)"
+            elif esito == 2:
+                badge = f"🟢 **{esito} PUNTI** (AMBO / RECUPERO)"
             else:
-                badge = f"🔴 **{esito_str} Punti** (Non vincente)"
+                badge = f"🔴 **{esito} Punti** (Non vincente)"
                 
-            st.markdown(f"**Colpo {len(st.session_state.storico_previsioni) - idx + 1}:** `{str_num}` | {badge}")
+            st.markdown(f"**Colpo {len(storico) - idx + 1}:** `{str_num}` | {badge}")
+
+# Visualizzazione rapida delle 3 estrazioni attualmente usate dal bot
+if len(archivio) >= 3:
+    st.markdown("---")
+    with st.expander("👁️ Controlla le 3 estrazioni attuali analizzate dal Bot"):
+        for i, ext in enumerate(archivio[-3:], 1):
+            st.write(f"**Estrazione -{3 - i + 1}:** {sorted(ext)}")
