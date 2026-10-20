@@ -3,15 +3,12 @@ import json
 import re
 import urllib.request
 import ssl
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
+from collections import Counter
 import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto PyTorch - 10 Estrazioni Purne",
+    page_title="Bot 10eLotto - Brute Force 10 Estrazioni",
     page_icon="🎲",
     layout="centered"
 )
@@ -124,78 +121,44 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# ARCHITETTURA NEURALE PURA (LOOKBACK = 10)
+# MOTORE BRUTE FORCE PURA (ULTIME 10 ESTRAZIONI)
 # ==========================================
-class LottoPureLSTM(nn.Module):
-    def __init__(self, input_dim=90, hidden_dim=64, output_dim=90):
-        super(LottoPureLSTM, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, output_dim)
-
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        logits = self.fc(out[:, -1, :])
-        return logits
-
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     lookback = 10  # Finestra fissa sulle ultime 10 estrazioni
     
-    if len(archivio) < lookback + 1:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 1} estrazioni!")
+    if len(archivio) < lookback:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Analisi neurale sequenziale sulle ultime **{lookback} estrazioni** in corso...")
+    st.info(f"Analisi Brute Force statistica sulle ultime **{lookback} estrazioni** in corso...")
 
-    # Creazione della matrice binaria completa per tutto l'archivio
-    num_concorsi = len(archivio)
-    binary_matrix = np.zeros((num_concorsi, 90), dtype=np.float32)
-    for idx, ext in enumerate(archivio):
+    # Isoliamo esattamente le ultime 10 estrazioni dall'archivio
+    ultime_dieci = archivio[-lookback:]
+
+    # Contatore di frequenza pura su tutti i numeri da 1 a 90 in questa finestra
+    frequenze = Counter()
+    for ext in ultime_dieci:
         for n in ext:
             if 1 <= int(n) <= 90:
-                binary_matrix[idx, int(n) - 1] = 1.0
+                frequenze[int(n)] += 1
 
-    # Preparazione dei dati storici per addestrare l'andamento delle 10 estrazioni precedenti
-    X_list, y_list = [], []
-    for i in range(len(binary_matrix) - lookback):
-        X_list.append(binary_matrix[i : i + lookback])
-        y_list.append(binary_matrix[i + lookback])
+    # Assicuriamoci che tutti i 90 numeri siano presenti nel dizionario (anche quelli a 0 uscite)
+    for i in range(1, 91):
+        if i not in frequenze:
+            frequenze[i] = 0
 
-    X = torch.tensor(np.array(X_list), dtype=torch.float32)
-    y = torch.tensor(np.array(y_list), dtype=torch.float32)
+    # Ordinamento deterministico: prima per frequenza decrescente, poi per numero crescente per stabilità assoluta
+    classifica = sorted(frequenze.items(), key=lambda x: (-x[1], x[0]))
 
-    model = LottoPureLSTM(input_dim=90, hidden_dim=64, output_dim=90)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
-
-    # Training reale sulla sequenza storica
-    model.train()
-    for _ in range(100):
-        optimizer.zero_grad()
-        logits = model(X)
-        loss = criterion(logits, y)
-        loss.backward()
-        optimizer.step()
-
-    # Inferenza basata esattamente sull'ultimo blocco di 10 estrazioni
-    model.eval()
-    with torch.no_grad():
-        ultimo_blocco = binary_matrix[-lookback:].reshape(1, lookback, 90)
-        input_tensor = torch.tensor(ultimo_blocco, dtype=torch.float32)
-        logits_pred = model(input_tensor)
-        probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
-
-    # Classificazione indipendente dei 90 numeri basata sui pesi della rete
-    valutazioni = [{'numero': i + 1, 'score': probs[i]} for i in range(90)]
-    valutazioni.sort(key=lambda x: x['score'], reverse=True)
-
-    migliori = [item['numero'] for item in valutazioni[:quantita_numeri]]
+    # Prendiamo i migliori in base alla quantità richiesta
+    migliori = [item[0] for item in classifica[:quantita_numeri]]
     migliori.sort()
 
     st.session_state['ultima_previsione'] = migliori
 
-    # Output Grafico
-    st.markdown(f"### 🎯 PREVISIONE NEURALE PURA ({quantita_numeri} NUMERI):")
+    # Output Grafico Deterministico
+    st.markdown(f"### 🎯 PREVISIONE BRUTE FORCE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
@@ -209,8 +172,8 @@ def elabora_previsione(quantita_numeri):
     st.balloons()
 
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto PyTorch (10 Estrazioni Purne)")
-st.write("Modello sequenziale basato sulle ultime 10 estrazioni storiche.")
+st.title("🎲 Bot 10eLotto - Brute Force (10 Estrazioni)")
+st.write("Modello matematico deterministico basato sulla frequenza esatta delle ultime 10 estrazioni.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -250,7 +213,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Elaborazione sequenziale in corso..."):
+        with st.spinner("Calcolo Brute Force in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
