@@ -3,21 +3,19 @@ import json
 import re
 import urllib.request
 import ssl
-from collections import Counter
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import streamlit as st
 
-# Configurazione della pagina per adattarsi bene ai dispositivi mobili
+# Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto PyTorch Equilibrato",
+    page_title="Bot 10eLotto PyTorch - 10 Estrazioni & Verifica",
     page_icon="🎲",
     layout="centered"
 )
 
-# Percorso di salvataggio (compatibile con cloud e locale)
 CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
@@ -29,8 +27,8 @@ def carica_archivio():
         try:
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
-                return archivio_ordinato
+                # Manteniamo l'archivio con le estrazioni (salviamo anche l'ordine originale se possibile o le liste)
+                return archivio
         except Exception as e:
             st.error(f"Errore nella lettura del file di archivio: {e}")
     return []
@@ -109,7 +107,7 @@ def scarica_estrazioni_con_bypass():
                             break
                     
                     if len(numeri_validi) == 20:
-                        numeri_validi.sort()
+                        # Salviamo la tupla o lista preservando il primo estratto come Numero Oro (indice 0)
                         estrazioni_trovate.append({
                             'id': id_concorso,
                             'numeri': numeri_validi
@@ -126,11 +124,11 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# ARCHITETTURA PYTORCH EQUILIBRATA (1-90)
+# ARCHITETTURA PYTORCH PURA (LOOKBACK = 10)
 # ==========================================
-class LottoBalancedModel(nn.Module):
+class LottoPureModel(nn.Module):
     def __init__(self, input_dim=90, hidden_dim=64, output_dim=90):
-        super(LottoBalancedModel, self).__init__()
+        super(LottoPureModel, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(hidden_dim, output_dim)
@@ -143,40 +141,32 @@ class LottoBalancedModel(nn.Module):
 
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 3  # Finestra Hot 3 per il calcolo della tendenza
+    lookback = 10  # Finestra allargata alle ultime 10 estrazioni
     
     if len(archivio) < lookback:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per l'analisi a 10 colpi!")
         return
 
-    # 1. Rilevamento Cadenza Calda dalle ultime 3 estrazioni (per il bonus di spinta)
-    ultime_tre = archivio[-lookback:]
-    cadenze_totali = []
-    for ext in ultime_tre:
-        for n in ext:
-            cadenze_totali.append(n % 10)
+    st.info(f"Analisi neurale pura sulle ultime **{lookback} estrazioni** in corso...")
 
-    conteggio_cadenze = Counter(cadenze_totali)
-    cadenza_calda = conteggio_cadenze.most_common(1)[0][0]
-
-    st.info(f"Analisi completata. **Cadenza Calda di riferimento: {cadenza_calda}** (con spinta bilanciata su tutto il tabellone 1-90)")
-
-    # 2. Preparazione tensore PyTorch sull'intero archivio recente (o sulle ultime estrazioni)
+    # Conversione in matrice binaria
     binary_matrix = np.zeros((len(archivio), 90), dtype=np.float32)
     for idx, ext in enumerate(archivio):
+        # ext è la lista dei 20 numeri estratti
         for n in ext:
-            if 1 <= n <= 90:
-                binary_matrix[idx, n - 1] = 1.0
+            if 1 <= int(n) <= 90:
+                binary_matrix[idx, int(n) - 1] = 1.0
 
+    # Training del modello PyTorch sulle ultime 10 estrazioni
     X = torch.tensor(binary_matrix[-lookback:].mean(axis=0, keepdims=True), dtype=torch.float32)
     y = torch.tensor(binary_matrix[-1], dtype=torch.float32).unsqueeze(0)
 
-    model = LottoBalancedModel(input_dim=90, hidden_dim=64, output_dim=90)
+    model = LottoPureModel(input_dim=90, hidden_dim=64, output_dim=90)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.01)
 
     model.train()
-    for _ in range(100):
+    for _ in range(150):
         optimizer.zero_grad()
         logits = model(X)
         loss = criterion(logits, y)
@@ -188,36 +178,30 @@ def elabora_previsione(quantita_numeri):
         logits_pred = model(X)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    # 3. Tutti i 90 numeri partono ad armi pari basandosi sulle probabilità della rete.
-    # Aggiungiamo un leggero boost percentuale (+15%) solo ai numeri della cadenza calda per favorire la scia.
-    valutazioni = []
-    for i in range(90):
-        num = i + 1
-        score = probs[i]
-        if (num % 10) == cadenza_calda:
-            score *= 1.15  # Leggero bonus di spinta per la cadenza calda
-        valutazioni.append({'numero': num, 'score': score})
-
-    # Ordinamento globale su tutti i 90 numeri del lotto
+    # Selezione pura basata interamente sui punteggi della rete (senza filtri di cadenza)
+    valutazioni = [{'numero': i + 1, 'score': probs[i]} for i in range(90)]
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
+
     migliori = [item['numero'] for item in valutazioni[:quantita_numeri]]
     migliori.sort()
 
-    # Calcolo Indice di Concentrazione basato sui pesi reali
+    # Salviamo la previsione in session_state per poterla verificare dopo
+    st.session_state['ultima_previsione'] = migliori
+
+    # Calcolo concentrazione
     score_totale = sum([v['score'] for v in valutazioni])
     score_selezionati = sum([next(v['score'] for v in valutazioni if v['numero'] == n) for n in migliori])
     concentrazione = int((score_selezionati / max(score_totale, 0.001)) * 100 * (90 / quantita_numeri))
     concentrazione = min(max(concentrazione, 45), 88)
 
-    # Output Grafico Semaforo Cassa
     if concentrazione >= 60:
-        st.success(f"🟢 Indice di Concentrazione: **{concentrazione}%** (Scia Rovente -> Base + Extra)")
+        st.success(f"🟢 Indice di Concentrazione: **{concentrazione}%** (Scia Forte -> Base + Extra)")
     elif 50 <= concentrazione <= 59:
         st.warning(f"🟡 Indice di Concentrazione: **{concentrazione}%** (Prudenza -> Solo Base)")
     else:
-        st.error(f"🔴 Indice di Concentrazione: **{concentrazione}%** (Debole -> Salta il turno / Stop)")
+        st.error(f"🔴 Indice di Concentrazione: **{concentrazione}%** (Debole -> Valuta Stop)")
 
-    st.markdown(f"### 🎯 GRUPPO CALDO ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🎯 PREVISIONE NEURALE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
@@ -231,20 +215,20 @@ def elabora_previsione(quantita_numeri):
     st.balloons()
 
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto PyTorch Equilibrato")
-st.write("Modello neurale aperto su tutti i 90 numeri con bonus dinamico per la Cadenza Calda.")
+st.title("🎲 Bot 10eLotto PyTorch (10 Estrazioni)")
+st.write("Modello neurale puro basato sulle ultime 10 estrazioni con verifica esiti integrata.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=6, value=4)
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
 
 opzione = st.sidebar.radio(
     "Scegli un'azione:",
-    ("Genera Previsione", "Scarica Web & Prendi Previsione", "Visualizza Archivio", "Svuota Archivio")
+    ("Genera Previsione", "Scarica Web & Prendi Previsione", "Verifica Ultima Previsione", "Visualizza Archivio", "Svuota Archivio")
 )
 
 if opzione == "Scarica Web & Prendi Previsione":
@@ -272,8 +256,49 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Elaborazione in corso..."):
+        with st.spinner("Elaborazione PyTorch (10 estrazioni) in corso..."):
             elabora_previsione(quantita)
+
+elif opzione == "Verifica Ultima Previsione":
+    st.subheader("🔍 Verifica Esiti Ultima Previsione")
+    if 'ultima_previsione' not in st.session_state or not st.session_state['ultima_previsione']:
+        st.warning("Nessuna previsione recente memorizzata in questa sessione. Generala prima dal menu!")
+    else:
+        archivio = carica_archivio()
+        if not archivio:
+            st.error("Archivio vuoto.")
+        else:
+            # Prendiamo l'ultima estrazione registrata nell'archivio
+            ultima_estrazione = archivio[-1]
+            # Il numero oro convenzionale corrisponde al primo estratto (o il primo numero della lista originale)
+            numero_oro = ultima_estrazione[0]
+            
+            pred = st.session_state['ultima_previsione']
+            
+            st.write(leggi_prev := f"**Tua previsione in verifica:** { ' - '.join(map(str, pred)) }")
+            st.write(f"**Ultima estrazione riscontrata:** { ' - '.join(map(str, ultima_estrazione)) }")
+            st.write(f"🌟 **Numero Oro di riferimento:** {numero_oro:02d}")
+            
+            # Calcolo riscontri
+            estratti_set = set(ultima_estrazione)
+            presi = [n for n in pred if n in estratti_set]
+            num_presi = len(presi)
+            
+            # Controllo Oro
+            preso_oro = numero_oro in presi
+            
+            st.markdown("---")
+            st.metric(label="Numeri Presi", value=f"{num_presi} su {len(pred)}")
+            if presi:
+                st.success(f"Numeri esatti trovati: **{ ' - '.join(map(str, presi)) }**")
+            else:
+                st.info("Nessun numero centrato in questo colpo.")
+                
+            if preso_oro:
+                st.balloons()
+                st.success(f"🔥 COMPLIMENTI! Hai centrato anche il **Numero Oro** ({numero_oro:02d})!")
+            else:
+                st.write("ℹ️ Numero Oro non incluso nella combinazione vincente di questa previsione.")
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
