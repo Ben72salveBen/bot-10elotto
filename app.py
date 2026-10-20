@@ -139,7 +139,7 @@ class MicroLottoNetHot3(nn.Module):
         return self.fc2(out).squeeze(-1)
 
 # ==========================================
-# MOTORE DI CALCOLO RIGOROSO SU ULTIME 3 ESTRAZIONI
+# MOTORE DI CALCOLO CON FORZATURA CADENZA CALDA
 # ==========================================
 def calcola_previsione_hot3(archivio_completo, quantita):
     if len(archivio_completo) < 3:
@@ -172,8 +172,8 @@ def calcola_previsione_hot3(archivio_completo, quantita):
                 candidati.append(n)
 
     tutte_comb = list(combinations(candidati, quantita))
-    if len(tutte_comb) > 60:
-        tutte_comb = tutte_comb[:60]
+    if len(tutte_comb) > 80:
+        tutte_comb = tutte_comb[:80]
 
     if not tutte_comb:
         fallback = [n for n, f in freq_3.most_common(quantita)]
@@ -183,19 +183,38 @@ def calcola_previsione_hot3(archivio_completo, quantita):
     penultima_est = set(ultime_3[-2])
     
     features_list = []
+    comb_valide = []
+    
+    # FORZATURA CADENZA: Filtriamo o diamo priorità assoluta alle combinazioni con la cadenza calda
     for comb in tutte_comb:
         cset = set(comb)
-        pres_ultima = len(cset.intersection(ultima_est))
-        pres_penultima = len(cset.intersection(penultima_est))
-        score_freq = sum(freq_3[n] for n in comb)
         bonus_cadenza = sum(1 for n in comb if n % 10 == cadenza_calda)
         
-        features_list.append([
-            float(pres_ultima),
-            float(pres_penultima),
-            float(score_freq),
-            float(bonus_cadenza)
-        ])
+        # Selezioniamo combinazioni che contengono almeno un numero della cadenza calda
+        if bonus_cadenza >= 1:
+            pres_ultima = len(cset.intersection(ultima_est))
+            pres_penultima = len(cset.intersection(penultima_est))
+            score_freq = sum(freq_3[n] for n in comb)
+            
+            features_list.append([
+                float(pres_ultima),
+                float(pres_penultima),
+                float(score_freq),
+                float(bonus_cadenza * 2.0)
+            ])
+            comb_valide.append(comb)
+
+    # Fallback se il filtro restrittivo non trova abbastanza combinazioni
+    if not comb_valide:
+        comb_valide = tutte_comb
+        for comb in tutte_comb:
+            cset = set(comb)
+            features_list.append([
+                float(len(cset.intersection(ultima_est))),
+                float(len(cset.intersection(penultima_est))),
+                float(sum(freq_3[n] for n in comb)),
+                0.0
+            ])
 
     x_tensor = torch.tensor(features_list, dtype=torch.float32)
     model = MicroLottoNetHot3(input_dim=4)
@@ -203,7 +222,7 @@ def calcola_previsione_hot3(archivio_completo, quantita):
     criterion = nn.MSELoss()
 
     model.train()
-    targets = torch.tensor([float(len(set(c).intersection(ultima_est))) for c in tutte_comb], dtype=torch.float32)
+    targets = torch.tensor([float(len(set(c).intersection(ultima_est))) for c in comb_valide], dtype=torch.float32)
     for epoch in range(30):
         optimizer.zero_grad()
         scores = model(x_tensor)
@@ -216,7 +235,7 @@ def calcola_previsione_hot3(archivio_completo, quantita):
         final_scores = model(x_tensor)
         best_idx = torch.argmax(final_scores).item()
         
-    quartina_scelta = sorted([int(n) for n in tutte_comb[best_idx]])
+    quartina_scelta = sorted([int(n) for n in comb_valide[best_idx]])
     
     # Indice di Concentrazione (%)
     punti_totali_scia = sum(freq_3[n] for n in quartina_scelta)
@@ -229,7 +248,7 @@ def calcola_previsione_hot3(archivio_completo, quantita):
 # INTERFACCIA WEB (STREAMLIT)
 # ==========================================
 st.title("🔥 Bot 10eLotto - Hot3 MicroLottoNet")
-st.caption("Focus rigoroso sulle ultime 3 estrazioni + Cadenze + Concentrazione + Tracciatore Esiti")
+st.caption("Focus rigoroso sulle ultime 3 estrazioni + Forzatura Cadenze + Concentrazione + Tracciatore Esiti")
 
 archivio = carica_archivio()
 storico = carica_storico()
@@ -267,7 +286,7 @@ if st.sidebar.button("🔄 Sincronizza Archivio da Web"):
         else:
             st.error("Impossibile scaricare dal web.")
 
-# RESET / TRIMMING A 40 ESTRAZIONI (Regola d'oro quando si arriva a 50)
+# RESET / TRIMMING A 40 ESTRAZIONI
 if st.sidebar.button("✂️ Resetta a 40 Estrazioni"):
     if len(archivio) > 40:
         archivio = archivio[-40:]
@@ -315,7 +334,6 @@ if st.button("🔥 Genera Previsione Hot3", type="primary"):
     else:
         previsione, concentrazione, cadenza_calda = calcola_previsione_hot3(archivio, quantita_numeri)
         
-        # Salviamo la previsione nello storico in attesa dell'estrazione successiva
         storico.append({
             'numeri': previsione,
             'concentrazione': concentrazione,
