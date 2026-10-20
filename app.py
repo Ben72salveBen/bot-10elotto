@@ -11,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto PyTorch - 10 Estrazioni & Verifica",
+    page_title="Bot 10eLotto PyTorch - 10 Estrazioni Purne",
     page_icon="🎲",
     layout="centered"
 )
@@ -27,8 +27,8 @@ def carica_archivio():
         try:
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                # Manteniamo l'archivio con le estrazioni (salviamo anche l'ordine originale se possibile o le liste)
-                return archivio
+                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) >= 20]
+                return archivio_ordinato
         except Exception as e:
             st.error(f"Errore nella lettura del file di archivio: {e}")
     return []
@@ -107,7 +107,7 @@ def scarica_estrazioni_con_bypass():
                             break
                     
                     if len(numeri_validi) == 20:
-                        # Salviamo la tupla o lista preservando il primo estratto come Numero Oro (indice 0)
+                        numeri_validi.sort()
                         estrazioni_trovate.append({
                             'id': id_concorso,
                             'numeri': numeri_validi
@@ -124,84 +124,78 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# ARCHITETTURA PYTORCH PURA (LOOKBACK = 10)
+# ARCHITETTURA NEURALE PURA (LOOKBACK = 10)
 # ==========================================
-class LottoPureModel(nn.Module):
+class LottoPureLSTM(nn.Module):
     def __init__(self, input_dim=90, hidden_dim=64, output_dim=90):
-        super(LottoPureModel, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        super(LottoPureLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
-        out = self.fc1(x)
-        out = self.relu(out)
-        logits = self.fc2(out)
+        out, _ = self.lstm(x)
+        logits = self.fc(out[:, -1, :])
         return logits
 
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 10  # Finestra allargata alle ultime 10 estrazioni
+    lookback = 10  # Finestra fissa sulle ultime 10 estrazioni
     
-    if len(archivio) < lookback:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per l'analisi a 10 colpi!")
+    if len(archivio) < lookback + 1:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 1} estrazioni!")
         return
 
-    st.info(f"Analisi neurale pura sulle ultime **{lookback} estrazioni** in corso...")
+    st.info(f"Analisi neurale sequenziale sulle ultime **{lookback} estrazioni** in corso...")
 
-    # Conversione in matrice binaria
-    binary_matrix = np.zeros((len(archivio), 90), dtype=np.float32)
+    # Creazione della matrice binaria completa per tutto l'archivio
+    num_concorsi = len(archivio)
+    binary_matrix = np.zeros((num_concorsi, 90), dtype=np.float32)
     for idx, ext in enumerate(archivio):
-        # ext è la lista dei 20 numeri estratti
         for n in ext:
             if 1 <= int(n) <= 90:
                 binary_matrix[idx, int(n) - 1] = 1.0
 
-    # Training del modello PyTorch sulle ultime 10 estrazioni
-    X = torch.tensor(binary_matrix[-lookback:].mean(axis=0, keepdims=True), dtype=torch.float32)
-    y = torch.tensor(binary_matrix[-1], dtype=torch.float32).unsqueeze(0)
+    # Preparazione dei dati storici per addestrare l'andamento delle 10 estrazioni precedenti
+    X_list, y_list = [], []
+    for i in range(len(binary_matrix) - lookback):
+        X_list.append(binary_matrix[i : i + lookback])
+        y_list.append(binary_matrix[i + lookback])
 
-    model = LottoPureModel(input_dim=90, hidden_dim=64, output_dim=90)
+    X = torch.tensor(np.array(X_list), dtype=torch.float32)
+    y = torch.tensor(np.array(y_list), dtype=torch.float32)
+
+    model = LottoPureLSTM(input_dim=90, hidden_dim=64, output_dim=90)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.01)
 
+    # Training reale sulla sequenza storica
     model.train()
-    for _ in range(150):
+    for _ in range(100):
         optimizer.zero_grad()
         logits = model(X)
         loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
 
+    # Inferenza basata esattamente sull'ultimo blocco di 10 estrazioni
     model.eval()
     with torch.no_grad():
-        logits_pred = model(X)
+        ultimo_blocco = binary_matrix[-lookback:].reshape(1, lookback, 90)
+        input_tensor = torch.tensor(ultimo_blocco, dtype=torch.float32)
+        logits_pred = model(input_tensor)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    # Selezione pura basata interamente sui punteggi della rete (senza filtri di cadenza)
+    # Classificazione indipendente dei 90 numeri basata sui pesi della rete
     valutazioni = [{'numero': i + 1, 'score': probs[i]} for i in range(90)]
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
     migliori = [item['numero'] for item in valutazioni[:quantita_numeri]]
     migliori.sort()
 
-    # Salviamo la previsione in session_state per poterla verificare dopo
     st.session_state['ultima_previsione'] = migliori
 
-    # Calcolo concentrazione
-    score_totale = sum([v['score'] for v in valutazioni])
-    score_selezionati = sum([next(v['score'] for v in valutazioni if v['numero'] == n) for n in migliori])
-    concentrazione = int((score_selezionati / max(score_totale, 0.001)) * 100 * (90 / quantita_numeri))
-    concentrazione = min(max(concentrazione, 45), 88)
-
-    if concentrazione >= 60:
-        st.success(f"🟢 Indice di Concentrazione: **{concentrazione}%** (Scia Forte -> Base + Extra)")
-    elif 50 <= concentrazione <= 59:
-        st.warning(f"🟡 Indice di Concentrazione: **{concentrazione}%** (Prudenza -> Solo Base)")
-    else:
-        st.error(f"🔴 Indice di Concentrazione: **{concentrazione}%** (Debole -> Valuta Stop)")
-
-    st.markdown(f"### 🎯 PREVISIONE NEURALE ({quantita_numeri} NUMERI):")
+    # Output Grafico
+    st.markdown(f"### 🎯 PREVISIONE NEURALE PURA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
@@ -215,8 +209,8 @@ def elabora_previsione(quantita_numeri):
     st.balloons()
 
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto PyTorch (10 Estrazioni)")
-st.write("Modello neurale puro basato sulle ultime 10 estrazioni con verifica esiti integrata.")
+st.title("🎲 Bot 10eLotto PyTorch (10 Estrazioni Purne)")
+st.write("Modello sequenziale basato sulle ultime 10 estrazioni storiche.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -256,35 +250,29 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Elaborazione PyTorch (10 estrazioni) in corso..."):
+        with st.spinner("Elaborazione sequenziale in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
     st.subheader("🔍 Verifica Esiti Ultima Previsione")
     if 'ultima_previsione' not in st.session_state or not st.session_state['ultima_previsione']:
-        st.warning("Nessuna previsione recente memorizzata in questa sessione. Generala prima dal menu!")
+        st.warning("Nessuna previsione recente memorizzata in questa sessione.")
     else:
         archivio = carica_archivio()
         if not archivio:
             st.error("Archivio vuoto.")
         else:
-            # Prendiamo l'ultima estrazione registrata nell'archivio
             ultima_estrazione = archivio[-1]
-            # Il numero oro convenzionale corrisponde al primo estratto (o il primo numero della lista originale)
             numero_oro = ultima_estrazione[0]
-            
             pred = st.session_state['ultima_previsione']
             
-            st.write(leggi_prev := f"**Tua previsione in verifica:** { ' - '.join(map(str, pred)) }")
+            st.write(f"**Tua previsione in verifica:** { ' - '.join(map(str, pred)) }")
             st.write(f"**Ultima estrazione riscontrata:** { ' - '.join(map(str, ultima_estrazione)) }")
             st.write(f"🌟 **Numero Oro di riferimento:** {numero_oro:02d}")
             
-            # Calcolo riscontri
             estratti_set = set(ultima_estrazione)
             presi = [n for n in pred if n in estratti_set]
             num_presi = len(presi)
-            
-            # Controllo Oro
             preso_oro = numero_oro in presi
             
             st.markdown("---")
@@ -298,7 +286,7 @@ elif opzione == "Verifica Ultima Previsione":
                 st.balloons()
                 st.success(f"🔥 COMPLIMENTI! Hai centrato anche il **Numero Oro** ({numero_oro:02d})!")
             else:
-                st.write("ℹ️ Numero Oro non incluso nella combinazione vincente di questa previsione.")
+                st.write("ℹ️ Numero Oro non incluso nella combinazione vincente.")
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
