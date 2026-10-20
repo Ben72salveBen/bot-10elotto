@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Brute Force 10 Estrazioni",
+    page_title="Bot 10eLotto - Brute Force Recenza",
     page_icon="🎲",
     layout="centered"
 )
@@ -121,7 +121,7 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# MOTORE BRUTE FORCE PURA (ULTIME 10 ESTRAZIONI)
+# MOTORE BRUTE FORCE CON PRIORITÀ DI RECENZA
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
@@ -131,33 +131,41 @@ def elabora_previsione(quantita_numeri):
         st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Analisi Brute Force statistica sulle ultime **{lookback} estrazioni** in corso...")
+    st.info(f"Analisi Brute Force con priorità di recenza sulle ultime **{lookback} estrazioni** in corso...")
 
-    # Isoliamo esattamente le ultime 10 estrazioni dall'archivio
     ultime_dieci = archivio[-lookback:]
 
-    # Contatore di frequenza pura su tutti i numeri da 1 a 90 in questa finestra
     frequenze = Counter()
-    for ext in ultime_dieci:
-        for n in ext:
-            if 1 <= int(n) <= 90:
-                frequenze[int(n)] += 1
+    ultima_apparizione = {}
 
-    # Assicuriamoci che tutti i 90 numeri siano presenti nel dizionario (anche quelli a 0 uscite)
+    # Scansioniamo le 10 estrazioni dalla più vecchia alla più recente (indice 0 = più vecchia, indice 9 = ultima/più recente)
+    for idx_estrazione, ext in enumerate(ultime_dieci):
+        for n in ext:
+            num = int(n)
+            if 1 <= num <= 90:
+                frequenze[num] += 1
+                # Memorizziamo l'indice dell'ultima estrazione in cui è apparso (più alto è, più è recente)
+                ultima_apparizione[num] = idx_estrazione
+
+    # Inizializziamo i numeri non usciti nelle ultime 10
     for i in range(1, 91):
         if i not in frequenze:
             frequenze[i] = 0
+        if i not in ultima_apparizione:
+            ultima_apparizione[i] = -1  # Mai uscito nella finestra
 
-    # Ordinamento deterministico: prima per frequenza decrescente, poi per numero crescente per stabilità assoluta
-    classifica = sorted(frequenze.items(), key=lambda x: (-x[1], x[0]))
+    # Ordinamento rigoroso:
+    # 1. Frequenza decrescente (-frequenze[i]) -> chi è uscito di più ha la precedenza
+    # 2. A parità di frequenza, indice di ultima apparizione decrescente (-ultima_apparizione[i]) -> chi è uscito più di recente vince
+    # 3. A parità totale, ordine numerico crescente (i)
+    classifica = sorted(range(1, 91), key=lambda i: (-frequenze[i], -ultima_apparizione[i], i))
 
-    # Prendiamo i migliori in base alla quantità richiesta
-    migliori = [item[0] for item in classifica[:quantita_numeri]]
-    migliori.sort()
+    migliori = classifica[:quantita_numeri]
+    migliori.sort()  # Ordinati in modo crescente per la schedina finale
 
     st.session_state['ultima_previsione'] = migliori
 
-    # Output Grafico Deterministico
+    # Output Grafico
     st.markdown(f"### 🎯 PREVISIONE BRUTE FORCE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
@@ -172,8 +180,8 @@ def elabora_previsione(quantita_numeri):
     st.balloons()
 
 # Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto - Brute Force (10 Estrazioni)")
-st.write("Modello matematico deterministico basato sulla frequenza esatta delle ultime 10 estrazioni.")
+st.title("🎲 Bot 10eLotto - Brute Force (Recenza)")
+st.write("Modello deterministico basato su frequenza e priorità di apparizione recente.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
