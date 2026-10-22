@@ -29,10 +29,6 @@ def carica_archivio():
                 for item in archivio:
                     if isinstance(item, dict):
                         cid = item.get('id', 0)
-                        # Filtro rigido anti-ID falsi HTML (> 288)
-                        if cid > 288 and cid != 0:
-                            continue
-                            
                         archivio_normalizzato.append({
                             'id': cid,
                             'numeri': sorted([int(n) for n in item.get('numeri', [])]),
@@ -75,16 +71,14 @@ def scarica_estrazioni_con_bypass():
             html = response.read().decode('utf-8', 'ignore')
             
             estrazioni_trovate = []
-            blocchi_split = re.split(r'#(\d+)', html)
+            
+            # Parser basato sulla dicitura ufficiale "Concorso" per evitare ID HTML spazzatura
+            blocchi_split = re.split(r'Concorso\s*(?:n\.?|num\.?)?\s*(\d+)', html, flags=re.IGNORECASE)
             
             for i in range(1, len(blocchi_split) - 1, 2):
                 id_concorso = int(blocchi_split[i])
-                
-                # Accetta solo concorsi reali del 10eLotto (1-288)
-                if not (1 <= id_concorso <= 288):
-                    continue
-                
                 testo_blocco = blocchi_split[i+1]
+                
                 cifre = re.findall(r'\b([1-9]|[1-8]\d|90)\b', testo_blocco)
                 numeri_int = [int(c) for c in cifre]
                 
@@ -213,7 +207,7 @@ if st.button("🗑️ Svuota e Reset Archivio", type="secondary", use_container_
             pass
     if 'ultima_previsione' in st.session_state:
         del st.session_state['ultima_previsione']
-    st.success("Archivio azzerato completamente! Clicca su 'Sincronizza Web' per ricaricare i dati freschi.")
+    st.success("Archivio azzerato! Clicca su 'Sincronizza Web' per ricaricare tutte le estrazioni fresche.")
     st.rerun()
 
 st.markdown("---")
