@@ -73,6 +73,12 @@ def scarica_estrazioni_con_bypass():
             
             for i in range(1, len(blocchi_split) - 1, 2):
                 id_concorso = int(blocchi_split[i])
+                
+                # 🛑 FILTRO ANTI-FALSI ID: Il 10eLotto ha max 288 concorsi al giorno (1-288). 
+                # Valori come 9660 sono ID tecnici del sito web e vengono scartati.
+                if not (1 <= id_concorso <= 288):
+                    continue
+                
                 testo_blocco = blocchi_split[i+1]
                 
                 cifre = re.findall(r'\b([1-9]|[1-8]\d|90)\b', testo_blocco)
@@ -187,7 +193,7 @@ with col1:
                 archivio_corrente = carica_archivio()
                 elabora_previsione(quantita)
             else:
-                st.error("Impossibile scaricare le estrazioni in automatico in questo momento (il sito ha risposto con un blocco temporaneo). Riprova tra poco.")
+                st.error("Impossibile scaricare le estrazioni in automatico in questo momento. Riprova tra poco.")
 
 with col2:
     if st.button("⚡ Calcola Previsione", type="secondary", use_container_width=True):
