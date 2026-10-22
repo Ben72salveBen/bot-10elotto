@@ -3,13 +3,14 @@ import json
 import re
 import urllib.request
 import ssl
-from collections import Counter
+from collections import defaultdict
+from itertools import combinations
 import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Brute Force Recenza",
-    page_icon="🎲",
+    page_title="Bot 10eLotto - Co-Occorrenza & Coppie (20 Estrazioni)",
+    page_icon="🔗",
     layout="centered"
 )
 
@@ -120,68 +121,87 @@ def scarica_estrazioni_con_bypass():
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
-# ==========================================
-# MOTORE BRUTE FORCE CON PRIORITÀ DI RECENZA
-# ==========================================
+# ====================================================
+# MOTORE DI CO-OCCORRENZA (COPPIE LEGATE - 20 ESTRAZIONI)
+# ====================================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 10  # Finestra fissa sulle ultime 10 estrazioni
+    lookback = 20  # Finestra sulle ultime 20 estrazioni
     
     if len(archivio) < lookback:
         st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Analisi Brute Force con priorità di recenza sulle ultime **{lookback} estrazioni** in corso...")
+    st.info(f"Analisi di Co-Occorrenza (Legami di Coppia) sulle ultime **{lookback} estrazioni** in corso...")
 
-    ultime_dieci = archivio[-lookback:]
+    ultime_venti = archivio[-lookback:]
 
-    frequenze = Counter()
+    # Dizionario per punteggi di legame e recenza
+    punteggio_co_occorrenza = defaultdict(int)
+    frequenza_singola = defaultdict(int)
     ultima_apparizione = {}
 
-    # Scansioniamo le 10 estrazioni dalla più vecchia alla più recente (indice 0 = più vecchia, indice 9 = ultima/più recente)
-    for idx_estrazione, ext in enumerate(ultime_dieci):
+    # Scansione dell'archivio recente
+    for idx, ext in enumerate(ultime_venti):
+        # Registriamo le frequenze singole e l'ultima apparizione
         for n in ext:
             num = int(n)
-            if 1 <= num <= 90:
-                frequenze[num] += 1
-                # Memorizziamo l'indice dell'ultima estrazione in cui è apparso (più alto è, più è recente)
-                ultima_apparizione[num] = idx_estrazione
+            frequenza_singola[num] += 1
+            ultima_apparizione[num] = idx  # Indice da 0 a 19 (19 = estrazione più recente)
 
-    # Inizializziamo i numeri non usciti nelle ultime 10
+        # Calcoliamo tutte le coppie uscite insieme in questa estrazione
+        coppie_in_estrazione = list(combinations(ext, 2))
+        for c in coppie_in_estrazione:
+            n1, n2 = int(c[0]), int(c[1])
+            # Aumentiamo il punteggio di legame per entrambi i numeri della coppia
+            punteggio_co_occorrenza[n1] += 1
+            punteggio_co_occorrenza[n2] += 1
+
+    # Inizializziamo eventuali numeri mai comparsi
     for i in range(1, 91):
-        if i not in frequenze:
-            frequenze[i] = 0
+        if i not in punteggio_co_occorrenza:
+            punteggio_co_occorrenza[i] = 0
+        if i not in frequenza_singola:
+            frequenza_singola[i] = 0
         if i not in ultima_apparizione:
-            ultima_apparizione[i] = -1  # Mai uscito nella finestra
+            ultima_apparizione[i] = -1
 
-    # Ordinamento rigoroso:
-    # 1. Frequenza decrescente (-frequenze[i]) -> chi è uscito di più ha la precedenza
-    # 2. A parità di frequenza, indice di ultima apparizione decrescente (-ultima_apparizione[i]) -> chi è uscito più di recente vince
-    # 3. A parità totale, ordine numerico crescente (i)
-    classifica = sorted(range(1, 91), key=lambda i: (-frequenze[i], -ultima_apparizione[i], i))
+    # Ordinamento:
+    # 1. Punteggio di Co-Occorrenza (totale legami di coppia condivisi)
+    # 2. Frequenza singola nelle 20 estrazioni
+    # 3. Indice di recenza (chi è uscito più di recente)
+    # 4. Numero crescente
+    classifica = sorted(
+        range(1, 91),
+        key=lambda i: (
+            -punteggio_co_occorrenza[i],
+            -frequenza_singola[i],
+            -ultima_apparizione[i],
+            i
+        )
+    )
 
     migliori = classifica[:quantita_numeri]
-    migliori.sort()  # Ordinati in modo crescente per la schedina finale
+    migliori.sort()
 
     st.session_state['ultima_previsione'] = migliori
 
     # Output Grafico
-    st.markdown(f"### 🎯 PREVISIONE BRUTE FORCE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🔗 PREVISIONE CO-OCCORRENZA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
     if quantita_numeri >= 2:
-        from itertools import combinations
-        coppie = list(combinations(migliori, 2))[:3]
-        st.markdown("#### 🎲 Ambi Consigliati:")
-        for i, c in enumerate(coppie, 1):
+        coppie_top = list(combinations(migliori, 2))[:3]
+        st.markdown("#### 🎲 Coppie/Ambi con il Legame più Forte:")
+        for i, c in enumerate(coppie_top, 1):
             st.text(f"• Giocata {i}: {c[0]:02d} - {c[1]:02d}")
 
     st.balloons()
 
-# Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto - Brute Force (Recenza)")
-st.write("Modello deterministico basato su frequenza e priorità di apparizione recente.")
+# Interfaccia grafica
+st.title("🎲 Bot 10eLotto - Co-Occorrenza (20 Estrazioni)")
+st.write("Analisi dei cluster e legami di coppia con priorità di recenza.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -221,7 +241,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Calcolo Brute Force in corso..."):
+        with st.spinner("Calcolo Matrice Co-Occorrenza in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
