@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Micro-Trend & Offset",
+    page_title="Bot 10eLotto - Strategia Streak (2 Colpi)",
     page_icon="🔥",
     layout="centered"
 )
@@ -146,61 +146,49 @@ def scarica_estrazioni_con_bypass():
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
-# ====================================================
-# MOTORE AGGIORNATO: MICRO-TREND CON STRATEGIA OFFSET
-# ====================================================
+# ====================================================================
+# NUOVA STRATEGIA: STREAK 2 COLPI (INCLUSA ULTIMA, ESCLUSI 3+ DI FILA)
+# ====================================================================
 def elabora_previsione(quantita_numeri):
     archivio_completo = carica_archivio()
-    lookback = 9  # Prendiamo 9 estrazioni totali per applicare l'offset
     
-    if len(archivio_completo) < lookback:
-        st.warning(f"Servono almeno {lookback} estrazioni in archivio per l'algoritmo Offset!")
+    if len(archivio_completo) < 5:
+        st.warning("Servono almeno 5 estrazioni in archivio per calcolare le ripetizioni consecutive!")
         return
 
-    st.info(f"🔥 Analisi Offset & Fiammate (esclusa l'ultimissima estrazione) in corso...")
+    st.info("🔥 Analisi in corso: cerchiamo i numeri usciti per 2 volte di fila (puntando alla 3ª) ed escludendo quelli usciti 3+ volte...")
 
-    # ESCLUSIONE dell'ultimissima estrazione (-1) e analisi delle 8 precedenti
-    ultime_otto_senza_ultima = [ext['numeri'] for ext in archivio_completo[-lookback:-1]]
-
-    punteggio_fiammata = defaultdict(float)
-    frequenza_recentissima = defaultdict(int)
-    distanza_concorso = {}
-
-    for idx, ext in enumerate(ultime_otto_senza_ultima):
-        distanza = (len(ultime_otto_senza_ultima) - 1) - idx  
-        
-        for n in ext:
-            num = int(n)
-            frequenza_recentissima[num] += 1
-            distanza_concorso[num] = distanza
-
-            # Pesi calibrati sul rientro a breve termine (senza saturazione dell'ultimo colpo)
-            if distanza == 0:     # 1 colpo fa
-                punteggio_fiammata[num] += 2.5
-            elif distanza == 1:   # 2 colpi fa
-                punteggio_fiammata[num] += 2.0
-            elif distanza == 2:   # 3 colpi fa
-                punteggio_fiammata[num] += 1.5
-            else:
-                punteggio_fiammata[num] += 0.5
-
-    # Bonus extra per i numeri usciti più di una volta nell'intervallo
+    punteggio = {}
+    
     for num in range(1, 91):
-        if frequenza_recentissima[num] >= 2:
-            punteggio_fiammata[num] += (frequenza_recentissima[num] * 2.0)
-            
-        if num not in distanza_concorso:
-            distanza_concorso[num] = 99  # Mai uscito nella finestra
+        # Calcoliamo quante volte di fila il numero è uscito partendo dall'ultima estrazione (archivio[-1]) all'indietro
+        streak = 0
+        offset = 1
+        while len(archivio_completo) >= offset:
+            estrazione_corrente = archivio_completo[-offset]['numeri']
+            if num in estrazione_corrente:
+                streak += 1
+                offset += 1
+            else:
+                break
+        
+        # Regole impostate:
+        # - Se streak >= 3 (usciti 3 o più volte di fila): NON LI GIOCHIAMO (esclusi con -999)
+        # - Se streak == 2 (usciti 2 volte di fila, puntiamo alla 3ª): Priorità massima (+100)
+        # - Altri casi: Priorità inferiore o 0
+        if streak >= 3:
+            punteggio[num] = -999.0  # Scartati severamente
+        elif streak == 2:
+            punteggio[num] = 100.0   # Target ideale: obiettivo 3ª comparsa!
+        elif streak == 1:
+            punteggio[num] = 10.0    # Usciti solo nell'ultima estrazione
+        else:
+            punteggio[num] = 0.0     # Mai usciti di recente
 
-    # Ordinamento rigido della classifica
+    # Filtriamo ed ordiniamo escludendo i numeri banditi (-999)
     classifica = sorted(
-        range(1, 91),
-        key=lambda i: (
-            -punteggio_fiammata[i],
-            -frequenza_recentissima[i],
-            distanza_concorso[i],
-            i
-        )
+        [n for n in range(1, 91) if punteggio[n] > -500],
+        key=lambda i: (-punteggio[i], i)
     )
 
     migliori = classifica[:quantita_numeri]
@@ -208,11 +196,11 @@ def elabora_previsione(quantita_numeri):
 
     st.session_state['ultima_previsione'] = migliori
 
-    st.markdown(f"### 🔥 PREVISIONE OFFSET ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🔥 PREVISIONE STREAK ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    st.caption("I numeri scelti escludono l'ultima estrazione per evitare la saturazione e intercettano i rientri imminenti.")
+    st.caption("Numeri selezionati tra quelli ripetuti esattamente per 2 estrazioni di fila (escludendo quelli a streak 3+).")
     st.balloons()
 
 # Tabelle Premi Ufficiali
@@ -229,8 +217,8 @@ tabelle_extra = {
 }
 
 # Interfaccia
-st.title("🔥 Bot 10eLotto - Offset & Micro-Trend")
-st.write("Analisi fiammate escludendo l'ultima estrazione (Anti-Saturazione).")
+st.title("🔥 Bot 10eLotto - Strategia Streak (2 Colpi)")
+st.write("Target: Numeri alla 3ª ripetizione consecutiva (esclusi i 3+ di fila).")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -270,7 +258,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Calcolo Fiammate in corso..."):
+        with st.spinner("Calcolo Streak in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
