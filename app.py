@@ -25,18 +25,24 @@ def carica_archivio():
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
                 archivio_normalizzato = []
+                
                 for item in archivio:
-                    if isinstance(item, list):
+                    if isinstance(item, dict):
+                        cid = item.get('id', 0)
+                        # Filtro rigido anti-ID falsi HTML (> 288)
+                        if cid > 288 and cid != 0:
+                            continue
+                            
+                        archivio_normalizzato.append({
+                            'id': cid,
+                            'numeri': sorted([int(n) for n in item.get('numeri', [])]),
+                            'extra': sorted([int(n) for n in item.get('extra', [])])
+                        })
+                    elif isinstance(item, list):
                         archivio_normalizzato.append({
                             'id': 0,
                             'numeri': sorted([int(n) for n in item]),
                             'extra': []
-                        })
-                    elif isinstance(item, dict):
-                        archivio_normalizzato.append({
-                            'id': item.get('id', 0),
-                            'numeri': sorted([int(n) for n in item.get('numeri', [])]),
-                            'extra': sorted([int(n) for n in item.get('extra', [])])
                         })
                 return archivio_normalizzato
         except Exception:
@@ -74,13 +80,11 @@ def scarica_estrazioni_con_bypass():
             for i in range(1, len(blocchi_split) - 1, 2):
                 id_concorso = int(blocchi_split[i])
                 
-                # 🛑 FILTRO ANTI-FALSI ID: Il 10eLotto ha max 288 concorsi al giorno (1-288). 
-                # Valori come 9660 sono ID tecnici del sito web e vengono scartati.
+                # Accetta solo concorsi reali del 10eLotto (1-288)
                 if not (1 <= id_concorso <= 288):
                     continue
                 
                 testo_blocco = blocchi_split[i+1]
-                
                 cifre = re.findall(r'\b([1-9]|[1-8]\d|90)\b', testo_blocco)
                 numeri_int = [int(c) for c in cifre]
                 
@@ -114,7 +118,7 @@ def elabora_previsione(quantita_numeri):
         st.warning(f"Servono almeno {lookback} estrazioni in archivio. Clicca su Sincronizza Web!")
         return
 
-    # ESCLUSIONE dell'ultimissima estrazione (-1) per evitare il blocco di saturazione
+    # ESCLUSIONE dell'ultimissima estrazione (-1) per evitare il blocco di saturazione (Algoritmo Offset)
     ultime_otto_senza_ultima = [ext['numeri'] for ext in archivio_completo[-lookback:-1]]
 
     punteggio_fiammata = defaultdict(float)
@@ -193,11 +197,24 @@ with col1:
                 archivio_corrente = carica_archivio()
                 elabora_previsione(quantita)
             else:
-                st.error("Impossibile scaricare le estrazioni in automatico in questo momento. Riprova tra poco.")
+                st.error("Impossibile scaricare le estrazioni in automatico in questo momento.")
 
 with col2:
     if st.button("⚡ Calcola Previsione", type="secondary", use_container_width=True):
         elabora_previsione(quantita)
+
+# --- PULSANTE DI RESET RAPIDO ---
+st.markdown("---")
+if st.button("🗑️ Svuota e Reset Archivio", type="secondary", use_container_width=True):
+    if os.path.exists(NOME_FILE):
+        try:
+            os.remove(NOME_FILE)
+        except Exception:
+            pass
+    if 'ultima_previsione' in st.session_state:
+        del st.session_state['ultima_previsione']
+    st.success("Archivio azzerato completamente! Clicca su 'Sincronizza Web' per ricaricare i dati freschi.")
+    st.rerun()
 
 st.markdown("---")
 
