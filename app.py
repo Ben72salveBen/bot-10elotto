@@ -6,11 +6,11 @@ import ssl
 from collections import defaultdict
 import streamlit as st
 
+# Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto Mobile",
+    page_title="Bot 10eLotto - Micro-Trend & Offset",
     page_icon="🔥",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    layout="centered"
 )
 
 CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
@@ -25,24 +25,20 @@ def carica_archivio():
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
                 archivio_normalizzato = []
-                
                 for item in archivio:
-                    if isinstance(item, dict):
-                        cid = item.get('id', 0)
+                    if isinstance(item, list):
                         archivio_normalizzato.append({
-                            'id': cid,
-                            'numeri': sorted([int(n) for n in item.get('numeri', [])]),
-                            'extra': sorted([int(n) for n in item.get('extra', [])])
-                        })
-                    elif isinstance(item, list):
-                        archivio_normalizzato.append({
-                            'id': 0,
                             'numeri': sorted([int(n) for n in item]),
                             'extra': []
                         })
-                return archivio_normalizzato
-        except Exception:
-            pass
+                    elif isinstance(item, dict):
+                        archivio_normalizzato.append({
+                            'numeri': sorted([int(n) for n in item.get('numeri', [])]),
+                            'extra': sorted([int(n) for n in item.get('extra', [])])
+                        })
+                return [ext for ext in archivio_normalizzato if len(ext['numeri']) >= 20]
+        except Exception as e:
+            st.error(f"Errore nella lettura dell'archivio: {e}")
     return []
 
 def salva_archivio(archivio):
@@ -50,69 +46,120 @@ def salva_archivio(archivio):
         with open(NOME_FILE, "w", encoding="utf-8") as f:
             json.dump(archivio, f, ensure_ascii=False, indent=4)
         return True
-    except Exception:
+    except Exception as e:
+        st.error(f"Errore salvataggio: {e}")
         return False
 
 def scarica_estrazioni_con_bypass():
-    url = "https://lottologia.com/10elotto5minuti/estrazioni/"
+    url = "https://lottologia.com/10elotto5minuti/estrazioni"
+    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
+        'Connection': 'keep-alive',
         'Referer': 'https://lottologia.com/'
     }
     
+    req = urllib.request.Request(url, headers=headers)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
     try:
-        req = urllib.request.Request(url, headers=headers)
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        with urllib.request.urlopen(req, context=ctx, timeout=12) as response:
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
             html = response.read().decode('utf-8', 'ignore')
             
+            if "Domande Frequenti" in html:
+                html = html.split("Domande Frequenti")[0]
+            elif "domande frequenti" in html:
+                html = html.split("domande frequenti")[0]
+                
+            if "Seleziona Numeri" in html:
+                html = html.split("Seleziona Numeri")[-1]
+            elif "seleziona numeri" in html:
+                html = html.split("seleziona numeri")[-1]
+            
             estrazioni_trovate = []
+            blocchi = re.split(r'#(\d+)', html)
             
-            # Parser basato sulla dicitura ufficiale "Concorso" per evitare ID HTML spazzatura
-            blocchi_split = re.split(r'Concorso\s*(?:n\.?|num\.?)?\s*(\d+)', html, flags=re.IGNORECASE)
-            
-            for i in range(1, len(blocchi_split) - 1, 2):
-                id_concorso = int(blocchi_split[i])
-                testo_blocco = blocchi_split[i+1]
+            for i in range(1, len(blocchi), 2):
+                id_concorso = int(blocchi[i])
+                testo_blocco = blocchi[i+1]
                 
-                cifre = re.findall(r'\b([1-9]|[1-8]\d|90)\b', testo_blocco)
-                numeri_int = [int(c) for c in cifre]
+                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
+                    continue
                 
-                visti = set()
-                validi = [n for n in numeri_int if not (n in visti or visti.add(n))]
+                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
+                match_extra = re.search(r'Extra\s*([\s\S]*?)(?=Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
                 
-                if len(validi) >= 20:
-                    base = sorted(validi[:20])
-                    extra = sorted(validi[20:35]) if len(validi) >= 35 else []
-                    estrazioni_trovate.append({
-                        'id': id_concorso,
-                        'numeri': base,
-                        'extra': extra
-                    })
+                if match_num:
+                    testo_sezione = match_num.group(1)
+                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    
+                    numeri_validi = []
+                    visti = set()
+                    for p in pezzi_cifre:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti:
+                                    visti.add(sub)
+                                    numeri_validi.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti:
+                                visti.add(val)
+                                numeri_validi.append(val)
+                        if len(numeri_validi) == 20:
+                            break
+                    
+                    extra_validi = []
+                    if match_extra:
+                        testo_ext = match_extra.group(1)
+                        pezzi_ext = re.findall(r'\d+', testo_ext)
+                        visti_ext = set()
+                        for p in pezzi_ext:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti_ext:
+                                visti_ext.add(val)
+                                extra_validi.append(val)
+                            if len(extra_validi) == 15:
+                                break
 
-            if estrazioni_trovate:
-                diz = {e['id']: e for e in estrazioni_trovate}
-                risultato = list(diz.values())
-                risultato.sort(key=lambda x: x['id'])
-                return risultato
+                    if len(numeri_validi) == 20:
+                        numeri_validi.sort()
+                        extra_validi.sort()
+                        estrazioni_trovate.append({
+                            'id': id_concorso,
+                            'numeri': numeri_validi,
+                            'extra': extra_validi
+                        })
+
+            if not estrazioni_trovate:
+                return []
+
+            estrazioni_trovate.sort(key=lambda x: x['id'])
+            return estrazioni_trovate
+
     except Exception as e:
-        print(f"Errore di rete nello scraping: {e}")
-        
-    return []
+        st.error(f"Errore di connessione durante lo scraping: {e}")
+        return []
 
+# ====================================================
+# MOTORE AGGIORNATO: MICRO-TREND CON STRATEGIA OFFSET
+# ====================================================
 def elabora_previsione(quantita_numeri):
     archivio_completo = carica_archivio()
-    lookback = 9
+    lookback = 9  # Prendiamo 9 estrazioni totali per applicare l'offset
     
     if len(archivio_completo) < lookback:
-        st.warning(f"Servono almeno {lookback} estrazioni in archivio. Clicca su Sincronizza Web!")
+        st.warning(f"Servono almeno {lookback} estrazioni in archivio per l'algoritmo Offset!")
         return
 
-    # ESCLUSIONE dell'ultimissima estrazione (-1) per evitare il blocco di saturazione (Algoritmo Offset)
+    st.info(f"🔥 Analisi Offset & Fiammate (esclusa l'ultimissima estrazione) in corso...")
+
+    # ESCLUSIONE dell'ultimissima estrazione (-1) e analisi delle 8 precedenti
     ultime_otto_senza_ultima = [ext['numeri'] for ext in archivio_completo[-lookback:-1]]
 
     punteggio_fiammata = defaultdict(float)
@@ -127,22 +174,25 @@ def elabora_previsione(quantita_numeri):
             frequenza_recentissima[num] += 1
             distanza_concorso[num] = distanza
 
-            if distanza == 0:
+            # Pesi calibrati sul rientro a breve termine (senza saturazione dell'ultimo colpo)
+            if distanza == 0:     # 1 colpo fa
                 punteggio_fiammata[num] += 2.5
-            elif distanza == 1:
+            elif distanza == 1:   # 2 colpi fa
                 punteggio_fiammata[num] += 2.0
-            elif distanza == 2:
+            elif distanza == 2:   # 3 colpi fa
                 punteggio_fiammata[num] += 1.5
             else:
                 punteggio_fiammata[num] += 0.5
 
+    # Bonus extra per i numeri usciti più di una volta nell'intervallo
     for num in range(1, 91):
         if frequenza_recentissima[num] >= 2:
             punteggio_fiammata[num] += (frequenza_recentissima[num] * 2.0)
             
         if num not in distanza_concorso:
-            distanza_concorso[num] = 99
+            distanza_concorso[num] = 99  # Mai uscito nella finestra
 
+    # Ordinamento rigido della classifica
     classifica = sorted(
         range(1, 91),
         key=lambda i: (
@@ -158,75 +208,136 @@ def elabora_previsione(quantita_numeri):
 
     st.session_state['ultima_previsione'] = migliori
 
-    st.success("✅ Previsione Elaborata con Algoritmo Offset!")
-    st.markdown(f"### 🔥 NUMERI CONSIGLIATI ({quantita_numeri}):")
+    st.markdown(f"### 🔥 PREVISIONE OFFSET ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
-    st.markdown(f"# **` {numeri_str} `**")
-    st.caption("🔍 Algoritmo Offset: Ultima estrazione esclusa per intercettare i rientri imminenti.")
+    st.markdown(f"## **` {numeri_str} `**")
+    
+    st.caption("I numeri scelti escludono l'ultima estrazione per evitare la saturazione e intercettano i rientri imminenti.")
+    st.balloons()
 
-# --- INTERFACCIA PRINCIPALE ---
-st.title("🎲 Bot 10eLotto Mobile")
+# Tabelle Premi Ufficiali
+tabelle_base = {
+    2: {2: 14}, 3: {3: 45, 2: 2}, 4: {4: 90, 3: 10, 2: 1},
+    5: {5: 140, 4: 15, 3: 4, 2: 1}, 6: {6: 1000, 5: 100, 4: 10, 3: 2},
+    10: {10: 1000000, 9: 20000, 8: 1000, 7: 150, 6: 15, 5: 2, 0: 2}
+}
+
+tabelle_extra = {
+    2: {2: 25}, 3: {3: 100, 2: 5}, 4: {4: 200, 3: 20, 2: 2},
+    5: {5: 300, 4: 30, 3: 8, 2: 2}, 6: {6: 2000, 5: 200, 4: 20, 3: 4},
+    10: {10: 2000000, 9: 40000, 8: 2000, 7: 300, 6: 30, 5: 4, 0: 4}
+}
+
+# Interfaccia
+st.title("🔥 Bot 10eLotto - Offset & Micro-Trend")
+st.write("Analisi fiammate escludendo l'ultima estrazione (Anti-Saturazione).")
 
 archivio_corrente = carica_archivio()
-st.metric(label="Estrazioni totali in Archivio", value=len(archivio_corrente))
+st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-quantita = st.slider("Quanti numeri vuoi giocare?", min_value=2, max_value=10, value=2)
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=2)
 
-col1, col2 = st.columns(2)
+st.sidebar.markdown("---")
+st.sidebar.subheader("Menu Operazioni")
 
-with col1:
-    if st.button("🔄 Sincronizza Web", type="primary", use_container_width=True):
-        with st.spinner("Scaricamento ultime estrazioni dal web..."):
-            estrazioni = scarica_estrazioni_con_bypass()
-            if estrazioni:
+opzione = st.sidebar.radio(
+    "Scegli un'azione:",
+    ("Genera Previsione", "Scarica Web & Prendi Previsione", "Verifica Ultima Previsione", "Visualizza Archivio", "Svuota Archivio")
+)
+
+if opzione == "Scarica Web & Prendi Previsione":
+    if st.button("Avvia Sincronizzazione Web", type="primary"):
+        with st.spinner("Connessione in corso..."):
+            estrazioni_scaricate = scarica_estrazioni_con_bypass()
+            if len(estrazioni_scaricate) > 0:
                 archivio = carica_archivio()
                 set_esistenti = {tuple(ext['numeri']) for ext in archivio}
-                nuove = 0
-                for ext in estrazioni:
-                    if tuple(ext['numeri']) not in set_esistenti:
+                nuove_aggiunte = 0
+                for ext in estrazioni_scaricate:
+                    chiave = tuple(ext['numeri'])
+                    if chiave not in set_esistenti:
                         archivio.append(ext)
-                        nuove += 1
-                salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! Aggiunte {nuove} nuove estrazioni.")
-                archivio_corrente = carica_archivio()
-                elabora_previsione(quantita)
+                        set_esistenti.add(chiave)
+                        nuove_aggiunte += 1
+                
+                if salva_archivio(archivio):
+                    st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} estrazioni.")
+                    elabora_previsione(quantita)
+                else:
+                    st.error("Errore salvataggio file.")
             else:
-                st.error("Impossibile scaricare le estrazioni in automatico in questo momento.")
+                st.error("Nessuna estrazione trovata.")
 
-with col2:
-    if st.button("⚡ Calcola Previsione", type="secondary", use_container_width=True):
-        elabora_previsione(quantita)
+elif opzione == "Genera Previsione":
+    if st.button("Genera Previsione da Archivio", type="primary"):
+        with st.spinner("Calcolo Fiammate in corso..."):
+            elabora_previsione(quantita)
 
-# --- PULSANTE DI RESET RAPIDO ---
-st.markdown("---")
-if st.button("🗑️ Svuota e Reset Archivio", type="secondary", use_container_width=True):
-    if os.path.exists(NOME_FILE):
-        try:
-            os.remove(NOME_FILE)
-        except Exception:
-            pass
-    if 'ultima_previsione' in st.session_state:
-        del st.session_state['ultima_previsione']
-    st.success("Archivio azzerato! Clicca su 'Sincronizza Web' per ricaricare tutte le estrazioni fresche.")
-    st.rerun()
-
-st.markdown("---")
-
-if 'ultima_previsione' in st.session_state and st.session_state['ultima_previsione']:
-    st.subheader("📊 Ultima Previsione Memorizzata")
-    pred = st.session_state['ultima_previsione']
-    st.write("👉 " + " - ".join(map(str, pred)))
-    
-    if archivio_corrente:
-        ultima_estrazione = archivio_corrente[-1]['numeri']
-        presi = [n for n in pred if n in set(ultima_estrazione)]
-        st.metric(label="Centrati nell'Ultima Estrazione", value=f"{len(presi)} su {len(pred)}")
-        if presi:
-            st.success(f"Presi: {', '.join(map(str, presi))}")
-
-with st.expander("📁 Vedi Storico Estrazioni in Archivio"):
-    if not archivio_corrente:
-        st.write("Archivio vuoto.")
+elif opzione == "Verifica Ultima Previsione":
+    st.subheader("🔍 Verifica Esiti Ultima Previsione")
+    if 'ultima_previsione' not in st.session_state or not st.session_state['ultima_previsione']:
+        st.warning("Nessuna previsione memorizzata.")
     else:
-        for idx, ext in enumerate(reversed(archivio_corrente[-15:])):
-            st.text(f"Concorso #{ext.get('id', 'N/D')}: {', '.join(map(str, ext['numeri']))}")
+        archivio = carica_archivio()
+        if not archivio:
+            st.error("Archivio vuoto.")
+        else:
+            ultima_estrazione = archivio[-1]
+            numeri_base = ultima_estrazione['numeri']
+            numeri_extra = ultima_estrazione['extra']
+            pred = st.session_state['ultima_previsione']
+            
+            st.write(f"**Tua previsione in verifica:** { ' - '.join(map(str, pred)) }")
+            st.write(f"**Ultima estrazione BASE:** { ' - '.join(map(str, numeri_base)) }")
+            if numeri_extra:
+                st.write(f"🌟 **Ultima estrazione EXTRA:** { ' - '.join(map(str, numeri_extra)) }")
+            
+            gioca_extra = st.checkbox("Modalità EXTRA attiva (+1€)", value=True)
+            
+            set_base = set(numeri_base)
+            presi_base = [n for n in pred if n in set_base]
+            num_presi_base = len(presi_base)
+            premio_base = tabelle_base.get(len(pred), {}).get(num_presi_base, 0)
+            
+            set_extra = set(numeri_extra) if numeri_extra else set()
+            presi_extra = [n for n in pred if n in set_extra]
+            num_presi_extra = len(presi_extra)
+            premio_extra = tabelle_extra.get(len(pred), {}).get(num_presi_extra, 0) if gioca_extra else 0
+            
+            costo_totale = 2 if gioca_extra else 1
+            premio_totale = premio_base + (premio_extra if gioca_extra else 0)
+            netto = premio_totale - costo_totale
+            
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(label="Presi in BASE", value=f"{num_presi_base} su {len(pred)}")
+                if presi_base:
+                    st.success(f"Base: { ' - '.join(map(str, presi_base)) } ({premio_base}€)")
+            with col2:
+                if gioca_extra:
+                    st.metric(label="Presi in EXTRA", value=f"{num_presi_extra} su {len(pred)}")
+                    if presi_extra:
+                        st.success(f"Extra: { ' - '.join(map(str, presi_extra)) } ({premio_extra}€)")
+            
+            st.markdown("---")
+            st.markdown(f"### Bilancio Netto Colpo: **{'+' if netto > 0 else ''}{netto} €**")
+            
+            if premio_totale > 0:
+                st.balloons()
+
+elif opzione == "Visualizza Archivio":
+    st.subheader("📁 Storico Estrazioni Salvate")
+    archivio = carica_archivio()
+    if len(archivio) == 0:
+        st.info("Archivio vuoto.")
+    else:
+        for idx, ext in enumerate(reversed(archivio)):
+            nums = ', '.join(map(str, ext['numeri']))
+            exts = ', '.join(map(str, ext['extra'])) if ext['extra'] else "N/D"
+            st.text(f"#{len(archivio)-idx} | Base: [{nums}] | Extra: [{exts}]")
+
+elif opzione == "Svuota Archivio":
+    if st.button("Conferma Cancellazione Archivio", type="secondary"):
+        salva_archivio([])
+        st.success("Archivio pulito.")
