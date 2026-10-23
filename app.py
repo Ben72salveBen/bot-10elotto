@@ -8,8 +8,8 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Compensazione Incrociata",
-    page_icon="⚡",
+    page_title="Bot 10eLotto - Ritardo Specchio Sincrono",
+    page_icon="🪞",
     layout="centered"
 )
 
@@ -147,26 +147,26 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ====================================================================
-# STRATEGIA COMPENSAZIONE INCROCIATA (BASE vs EXTRA)
+# STRATEGIA RITARDO SPECCHIO SINCRONO (RITARDO BASE == RITARDO EXTRA)
 # ====================================================================
 def elabora_previsione(quantita_numeri):
     archivio_completo = carica_archivio()
-    lookback = 15  # Finestra di analisi di 15 estrazioni per valutare i ritardi di compensazione
+    lookback = 20  # Finestra per calcolare il ritardo esatto
     
     if len(archivio_completo) < lookback:
         st.warning(f"Servono almeno {lookback} estrazioni in archivio!")
         return
 
-    st.info("⚡ Calcolo Compensazione Incrociata Base/Extra in corso...")
+    st.info("🪞 Ricerca numeri con STESSO RITARDO SINCRONO in Base ed Extra...")
 
     ultime = archivio_completo[-lookback:]
 
-    # Calcolo ritardo specifico per la Base e per l'Extra
     ritardo_base = {n: lookback for n in range(1, 91)}
     ritardo_extra = {n: lookback for n in range(1, 91)}
 
+    # Calcolo ritardo esatto dall'ultima estrazione all'indietro (0 = ultima estrazione)
     for idx, ext in enumerate(reversed(ultime)):
-        distanza = idx  # 0 = ultimissima estrazione
+        distanza = idx
         
         for n in ext['numeri']:
             if ritardo_base[int(n)] == lookback:
@@ -177,21 +177,35 @@ def elabora_previsione(quantita_numeri):
                 ritardo_extra[int(n)] = distanza
 
     punteggio = {}
+    dettagli_ritardi = {}
+
     for num in range(1, 91):
         rb = ritardo_base[num]
         re_val = ritardo_extra[num]
         
-        # 1. Punteggio Compensazione: un numero che manca da un lato ma è uscito di recente dall'altro
-        differenziale = abs(rb - re_val)
+        dettagli_ritardi[num] = (rb, re_val)
         
-        # 2. Punteggio Maturità: numeri che mancano da 3 a 8 colpi da entrambi i lati (pronti al rientro)
-        maturita = 0
-        if 3 <= rb <= 8 and 3 <= re_val <= 8:
-            maturita = 15.0
-            
-        punteggio[num] = (differenziale * 2.0) + maturita
+        # 1. CONDIZIONE SPECCHIO: Il ritardo deve essere IDENTICO sia in Base che in Extra
+        if rb == re_val:
+            # Diamo punteggio in base alla maturità del ritardo specchio
+            if 2 <= rb <= 8:
+                # Fascia perfetta per il ciclo di 4 colpi: ritardo sincrono maturo
+                punteggio[num] = 100.0 + (rb * 5.0)
+            elif rb == 1:
+                # Ritardo specchio di 1 colpo fa
+                punteggio[num] = 50.0
+            elif rb > 8 and rb < lookback:
+                # Ritardo specchio alto
+                punteggio[num] = 20.0
+            else:
+                # Ritardo specchio a 0 (uscito nell'ultimissima) o non presente
+                punteggio[num] = 5.0
+        else:
+            # Penalizziamo chi ha ritardi diversi tra Base ed Extra
+            scarto = abs(rb - re_val)
+            punteggio[num] = -10.0 * scarto
 
-    # Ordinamento decrescente dei punteggi
+    # Ordinamento decrescente
     classifica = sorted(
         range(1, 91),
         key=lambda i: (-punteggio[i], i)
@@ -202,11 +216,14 @@ def elabora_previsione(quantita_numeri):
 
     st.session_state['ultima_previsione'] = migliori
 
-    st.markdown(f"### ⚡ PREVISIONE COMPENSAZIONE INCROCIATA ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🪞 PREVISIONE RITARDO SPECCHIO ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    st.caption("Numeri selezionati incrociando i ritardi e le presenze sbilanciate tra Base ed Extra per il ciclo di 4 colpi.")
+    # Mostra i ritardi sincroni trovati per i numeri selezionati
+    info_ritardi = ", ".join([f"**{n}** (Ritardo specchio: {dettagli_ritardi[n][0]})" for n in migliori])
+    st.markdown(f"📌 **Dettaglio Ritardi Sincroni:** {info_ritardi}")
+    st.caption("Numeri selezionati con lo STESSO IDENTICO ritardo contemporaneamente su Base ed Extra.")
     st.balloons()
 
 # Tabelle Premi Ufficiali
@@ -223,8 +240,8 @@ tabelle_extra = {
 }
 
 # Interfaccia
-st.title("⚡ Bot 10eLotto - Compensazione Base/Extra")
-st.write("Analisi incrociata per intercettare i rientri imminenti sbilanciati tra Base ed Extra.")
+st.title("🪞 Bot 10eLotto - Ritardo Specchio (Base = Extra)")
+st.write("Analisi di sincronia: seleziona i numeri con ritardo identico sia nel tabellone Base che in quello Extra.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -264,7 +281,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Calcolo Compensazione in corso..."):
+        with st.spinner("Calcolo Ritardi Sincroni in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
