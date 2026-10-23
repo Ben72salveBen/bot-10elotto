@@ -28,11 +28,13 @@ def carica_archivio():
                 for item in archivio:
                     if isinstance(item, list):
                         archivio_normalizzato.append({
+                            'id': 0,
                             'numeri': sorted([int(n) for n in item]),
                             'extra': []
                         })
                     elif isinstance(item, dict):
                         archivio_normalizzato.append({
+                            'id': int(item.get('id', 0)),
                             'numeri': sorted([int(n) for n in item.get('numeri', [])]),
                             'extra': sorted([int(n) for n in item.get('extra', [])])
                         })
@@ -61,12 +63,12 @@ def scarica_estrazioni_con_bypass():
         'Referer': 'https://lottologia.com/'
     }
     
-    req = urllib.request.Request(url, headers=headers)
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    
     try:
+        req = urllib.request.Request(url, headers=headers)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
         with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
             html = response.read().decode('utf-8', 'ignore')
             
@@ -147,80 +149,78 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ====================================================================
-# STRATEGIA RITARDO SPECCHIO SINCRONO (SENZA FILTRO NUMERI BASSI)
+# ELABORAZIONE PREVISIONE SICURA
 # ====================================================================
 def elabora_previsione(quantita_numeri):
-    archivio_completo = carica_archivio()
-    lookback = 20  
-    
-    if len(archivio_completo) < lookback:
-        st.warning(f"Servono almeno {lookback} estrazioni in archivio!")
-        return
-
-    st.info("🪞 Ricerca numeri con STESSO RITARDO SINCRONO in Base ed Extra...")
-
-    ultime = archivio_completo[-lookback:]
-
-    ritardo_base = {n: lookback for n in range(1, 91)}
-    ritardo_extra = {n: lookback for n in range(1, 91)}
-
-    for idx, ext in enumerate(reversed(ultime)):
-        distanza = idx
-        for n in ext['numeri']:
-            if ritardo_base[int(n)] == lookback:
-                ritardo_base[int(n)] = distanza
-        for n in ext.get('extra', []):
-            if ritardo_extra[int(n)] == lookback:
-                ritardo_extra[int(n)] = distanza
-
-    punteggio = {}
-    dettagli_ritardi = {}
-
-    for num in range(1, 91):
-        rb = ritardo_base[num]
-        re_val = ritardo_extra[num]
-        dettagli_ritardi[num] = (rb, re_val)
+    try:
+        archivio_completo = carica_archivio()
+        lookback = 20  
         
-        if rb == re_val:
-            if 2 <= rb <= 8:
-                punteggio[num] = 100.0 + (rb * 5.0)
-            elif rb == 1:
-                punteggio[num] = 50.0
-            elif rb > 8 and rb < lookback:
-                punteggio[num] = 20.0
+        if len(archivio_completo) < lookback:
+            st.warning(f"Servono almeno {lookback} estrazioni in archivio per calcolare il ritardo specchio! (Attualmente ne hai {len(archivio_completo)}).")
+            return
+
+        st.info("🪞 Ricerca numeri con STESSO RITARDO SINCRONO in Base ed Extra...")
+
+        ultime = archivio_completo[-lookback:]
+
+        ritardo_base = {n: lookback for n in range(1, 91)}
+        ritardo_extra = {n: lookback for n in range(1, 91)}
+
+        for idx, ext in enumerate(reversed(ultime)):
+            distanza = idx
+            for n in ext['numeri']:
+                if ritardo_base[int(n)] == lookback:
+                    ritardo_base[int(n)] = distanza
+            for n in ext.get('extra', []):
+                if ritardo_extra[int(n)] == lookback:
+                    ritardo_extra[int(n)] = distanza
+
+        punteggio = {}
+        dettagli_ritardi = {}
+
+        for num in range(1, 91):
+            rb = ritardo_base[num]
+            re_val = ritardo_extra[num]
+            dettagli_ritardi[num] = (rb, re_val)
+            
+            if rb == re_val:
+                if 2 <= rb <= 8:
+                    punteggio[num] = 100.0 + (rb * 5.0)
+                elif rb == 1:
+                    punteggio[num] = 50.0
+                elif rb > 8 and rb < lookback:
+                    punteggio[num] = 20.0
+                else:
+                    punteggio[num] = 5.0
             else:
-                punteggio[num] = 5.0
-        else:
-            scarto = abs(rb - re_val)
-            punteggio[num] = -10.0 * scarto
+                scarto = abs(rb - re_val)
+                punteggio[num] = -10.0 * scarto
 
-    # Usiamo l'ID dell'ultima estrazione come seme per evitare che i 
-    # numeri a parità di punteggio siano sempre i più bassi (1, 2, 3...)
-    ultimo_id = archivio_completo[-1]['id'] if archivio_completo else 42
-    tutti_numeri = list(range(1, 91))
-    random.seed(int(ultimo_id))
-    random.shuffle(tutti_numeri)
+        ultimo_id = archivio_completo[-1].get('id', 42) if archivio_completo else 42
+        tutti_numeri = list(range(1, 91))
+        random.seed(int(ultimo_id))
+        random.shuffle(tutti_numeri)
 
-    # Ordinamento basato unicamente sul punteggio decrescente
-    classifica = sorted(
-        tutti_numeri,
-        key=lambda i: -punteggio[i]
-    )
+        classifica = sorted(
+            tutti_numeri,
+            key=lambda i: -punteggio[i]
+        )
 
-    migliori = classifica[:quantita_numeri]
-    
-    # NIENTE PIÙ .sort() FORZATO: i numeri mantengono l'ordine di punteggio e non partono dai bassi!
+        migliori = classifica[:quantita_numeri]
 
-    st.session_state['ultima_previsione'] = migliori
+        st.session_state['ultima_previsione'] = migliori
 
-    st.markdown(f"### 🪞 PREVISIONE RITARDO SPECCHIO ({quantita_numeri} NUMERI):")
-    numeri_str = " - ".join(map(str, migliori))
-    st.markdown(f"## **` {numeri_str} `**")
-    
-    info_ritardi = ", ".join([f"**{n}** (Ritardo specchio: {dettagli_ritardi[n][0]})" for n in migliori])
-    st.markdown(f"📌 **Dettaglio Ritardi Sincroni:** {info_ritardi}")
-    st.caption("Numeri selezionati con lo STESSO IDENTICO ritardo su Base ed Extra, ordinati per punteggio reale.")
-    st.balloons()
+        st.markdown(f"### 🪞 PREVISIONE RITARDO SPECCHIO ({quantita_numeri} NUMERI):")
+        numeri_str = " - ".join(map(str, migliori))
+        st.markdown(f"## **` {numeri_str} `**")
+        
+        info_ritardi = ", ".join([f"**{n}** (Ritardo specchio: {dettagli_ritardi[n][0]})" for n in migliori])
+        st.markdown(f"📌 **Dettaglio Ritardi Sincroni:** {info_ritardi}")
+        st.caption("Numeri selezionati con lo STESSO IDENTICO ritardo su Base ed Extra, ordinati per punteggio reale.")
+        st.balloons()
+    except Exception as e:
+        st.error(f-f"Errore durante l'elaborazione della previsione: {e}")
 
 # Tabelle Premi Ufficiali
 tabelle_base = {
@@ -235,7 +235,7 @@ tabelle_extra = {
     10: {10: 2000000, 9: 40000, 8: 2000, 7: 300, 6: 30, 5: 4, 0: 4}
 }
 
-# Interfaccia
+# Interfaccia Streamlit
 st.title("🪞 Bot 10eLotto - Ritardo Specchio (Base = Extra)")
 st.write("Analisi di sincronia: seleziona i numeri con ritardo identico sia nel tabellone Base che in quello Extra.")
 
@@ -273,7 +273,7 @@ if opzione == "Scarica Web & Prendi Previsione":
                 else:
                     st.error("Errore salvataggio file.")
             else:
-                st.error("Nessuna estrazione trovata.")
+                st.error("Nessuna estrazione trovata o problemi di rete.")
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
@@ -283,7 +283,7 @@ elif opzione == "Genera Previsione":
 elif opzione == "Verifica Ultima Previsione":
     st.subheader("🔍 Verifica Esiti Ultima Previsione")
     if 'ultima_previsione' not in st.session_state or not st.session_state['ultima_previsione']:
-        st.warning("Nessuna previsione memorizzata.")
+        st.warning("Nessuna previsione memorizzata in questa sessione.")
     else:
         archivio = carica_archivio()
         if not archivio:
@@ -342,9 +342,9 @@ elif opzione == "Visualizza Archivio":
         for idx, ext in enumerate(reversed(archivio)):
             nums = ', '.join(map(str, ext['numeri']))
             exts = ', '.join(map(str, ext['extra'])) if ext['extra'] else "N/D"
-            st.text(f"#{len(archivio)-idx} | Base: [{nums}] | Extra: [{exts}]")
+            st.text(f"Estrazione #{ext.get('id', len(archivio)-idx)} | Base: [{nums}] | Extra: [{exts}]")
 
 elif opzione == "Svuota Archivio":
     if st.button("Conferma Cancellazione Archivio", type="secondary"):
         salva_archivio([])
-        st.success("Archivio pulito.")
+        st.success("Archivio pulito con successo.")
