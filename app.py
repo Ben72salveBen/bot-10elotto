@@ -8,8 +8,8 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Sinergia Base + Extra",
-    page_icon="🌟",
+    page_title="Bot 10eLotto - Compensazione Incrociata",
+    page_icon="⚡",
     layout="centered"
 )
 
@@ -147,37 +147,51 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ====================================================================
-# NUOVA STRATEGIA: SINERGIA BASE + EXTRA (INCLUSA ULTIMA ESTRAZIONE)
+# STRATEGIA COMPENSAZIONE INCROCIATA (BASE vs EXTRA)
 # ====================================================================
 def elabora_previsione(quantita_numeri):
     archivio_completo = carica_archivio()
-    lookback = 8  # Analizziamo le ultime 8 estrazioni
+    lookback = 15  # Finestra di analisi di 15 estrazioni per valutare i ritardi di compensazione
     
     if len(archivio_completo) < lookback:
         st.warning(f"Servono almeno {lookback} estrazioni in archivio!")
         return
 
-    st.info("🌟 Analisi Sinergia Base + Extra (inclusa l'ultima estrazione) in corso...")
+    st.info("⚡ Calcolo Compensazione Incrociata Base/Extra in corso...")
 
-    # Prendiamo le ultime 8 estrazioni (incluso l'indice -1, cioè l'ultima uscita)
-    ultime_otto = archivio_completo[-lookback:]
+    ultime = archivio_completo[-lookback:]
 
-    punteggio = defaultdict(float)
-    
-    for idx, ext in enumerate(ultime_otto):
-        # idx 7 = ultimissima estrazione, idx 0 = 8 estrazioni fa
-        # Più l'estrazione è recente, più il peso è alto
-        peso_recenza = 1.0 + (idx * 0.3) 
+    # Calcolo ritardo specifico per la Base e per l'Extra
+    ritardo_base = {n: lookback for n in range(1, 91)}
+    ritardo_extra = {n: lookback for n in range(1, 91)}
+
+    for idx, ext in enumerate(reversed(ultime)):
+        distanza = idx  # 0 = ultimissima estrazione
         
-        # Punti per i numeri usciti nella Base
         for n in ext['numeri']:
-            punteggio[int(n)] += (2.0 * peso_recenza)
-            
-        # Punti extra (bonus) per i numeri usciti nei concorsi Extra
+            if ritardo_base[int(n)] == lookback:
+                ritardo_base[int(n)] = distanza
+                
         for n in ext.get('extra', []):
-            punteggio[int(n)] += (1.5 * peso_recenza)
+            if ritardo_extra[int(n)] == lookback:
+                ritardo_extra[int(n)] = distanza
 
-    # Ordinamento in base al punteggio totale di sinergia Base + Extra
+    punteggio = {}
+    for num in range(1, 91):
+        rb = ritardo_base[num]
+        re_val = ritardo_extra[num]
+        
+        # 1. Punteggio Compensazione: un numero che manca da un lato ma è uscito di recente dall'altro
+        differenziale = abs(rb - re_val)
+        
+        # 2. Punteggio Maturità: numeri che mancano da 3 a 8 colpi da entrambi i lati (pronti al rientro)
+        maturita = 0
+        if 3 <= rb <= 8 and 3 <= re_val <= 8:
+            maturita = 15.0
+            
+        punteggio[num] = (differenziale * 2.0) + maturita
+
+    # Ordinamento decrescente dei punteggi
     classifica = sorted(
         range(1, 91),
         key=lambda i: (-punteggio[i], i)
@@ -188,11 +202,11 @@ def elabora_previsione(quantita_numeri):
 
     st.session_state['ultima_previsione'] = migliori
 
-    st.markdown(f"### 🌟 PREVISIONE SINERGIA BASE + EXTRA ({quantita_numeri} NUMERI):")
+    st.markdown(f"### ⚡ PREVISIONE COMPENSAZIONE INCROCIATA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    st.caption("Numeri calcolati combinando la frequenza e la convergenza tra le estrazioni Base e le estrazioni Extra recenti.")
+    st.caption("Numeri selezionati incrociando i ritardi e le presenze sbilanciate tra Base ed Extra per il ciclo di 4 colpi.")
     st.balloons()
 
 # Tabelle Premi Ufficiali
@@ -209,13 +223,13 @@ tabelle_extra = {
 }
 
 # Interfaccia
-st.title("🌟 Bot 10eLotto - Sinergia Base + Extra")
-st.write("Strategia unificata basata sulla convergenza tra numeri Base e Extra recenti.")
+st.title("⚡ Bot 10eLotto - Compensazione Base/Extra")
+st.write("Analisi incrociata per intercettare i rientri imminenti sbilanciati tra Base ed Extra.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=2)
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -250,7 +264,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Calcolo Sinergia in corso..."):
+        with st.spinner("Calcolo Compensazione in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
