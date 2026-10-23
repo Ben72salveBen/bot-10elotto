@@ -3,7 +3,7 @@ import json
 import re
 import urllib.request
 import ssl
-from collections import defaultdict
+import random
 import streamlit as st
 
 # Configurazione della pagina
@@ -147,11 +147,11 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ====================================================================
-# STRATEGIA RITARDO SPECCHIO SINCRONO (RITARDO BASE == RITARDO EXTRA)
+# STRATEGIA RITARDO SPECCHIO SINCRONO (SENZA FILTRO NUMERI BASSI)
 # ====================================================================
 def elabora_previsione(quantita_numeri):
     archivio_completo = carica_archivio()
-    lookback = 20  # Finestra per calcolare il ritardo esatto
+    lookback = 20  
     
     if len(archivio_completo) < lookback:
         st.warning(f"Servono almeno {lookback} estrazioni in archivio!")
@@ -164,14 +164,11 @@ def elabora_previsione(quantita_numeri):
     ritardo_base = {n: lookback for n in range(1, 91)}
     ritardo_extra = {n: lookback for n in range(1, 91)}
 
-    # Calcolo ritardo esatto dall'ultima estrazione all'indietro (0 = ultima estrazione)
     for idx, ext in enumerate(reversed(ultime)):
         distanza = idx
-        
         for n in ext['numeri']:
             if ritardo_base[int(n)] == lookback:
                 ritardo_base[int(n)] = distanza
-                
         for n in ext.get('extra', []):
             if ritardo_extra[int(n)] == lookback:
                 ritardo_extra[int(n)] = distanza
@@ -182,37 +179,37 @@ def elabora_previsione(quantita_numeri):
     for num in range(1, 91):
         rb = ritardo_base[num]
         re_val = ritardo_extra[num]
-        
         dettagli_ritardi[num] = (rb, re_val)
         
-        # 1. CONDIZIONE SPECCHIO: Il ritardo deve essere IDENTICO sia in Base che in Extra
         if rb == re_val:
-            # Diamo punteggio in base alla maturità del ritardo specchio
             if 2 <= rb <= 8:
-                # Fascia perfetta per il ciclo di 4 colpi: ritardo sincrono maturo
                 punteggio[num] = 100.0 + (rb * 5.0)
             elif rb == 1:
-                # Ritardo specchio di 1 colpo fa
                 punteggio[num] = 50.0
             elif rb > 8 and rb < lookback:
-                # Ritardo specchio alto
                 punteggio[num] = 20.0
             else:
-                # Ritardo specchio a 0 (uscito nell'ultimissima) o non presente
                 punteggio[num] = 5.0
         else:
-            # Penalizziamo chi ha ritardi diversi tra Base ed Extra
             scarto = abs(rb - re_val)
             punteggio[num] = -10.0 * scarto
 
-    # Ordinamento decrescente
+    # Usiamo l'ID dell'ultima estrazione come seme per evitare che i 
+    # numeri a parità di punteggio siano sempre i più bassi (1, 2, 3...)
+    ultimo_id = archivio_completo[-1]['id'] if archivio_completo else 42
+    tutti_numeri = list(range(1, 91))
+    random.seed(int(ultimo_id))
+    random.shuffle(tutti_numeri)
+
+    # Ordinamento basato unicamente sul punteggio decrescente
     classifica = sorted(
-        range(1, 91),
-        key=lambda i: (-punteggio[i], i)
+        tutti_numeri,
+        key=lambda i: -punteggio[i]
     )
 
     migliori = classifica[:quantita_numeri]
-    migliori.sort()
+    
+    # NIENTE PIÙ .sort() FORZATO: i numeri mantengono l'ordine di punteggio e non partono dai bassi!
 
     st.session_state['ultima_previsione'] = migliori
 
@@ -220,10 +217,9 @@ def elabora_previsione(quantita_numeri):
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    # Mostra i ritardi sincroni trovati per i numeri selezionati
     info_ritardi = ", ".join([f"**{n}** (Ritardo specchio: {dettagli_ritardi[n][0]})" for n in migliori])
     st.markdown(f"📌 **Dettaglio Ritardi Sincroni:** {info_ritardi}")
-    st.caption("Numeri selezionati con lo STESSO IDENTICO ritardo contemporaneamente su Base ed Extra.")
+    st.caption("Numeri selezionati con lo STESSO IDENTICO ritardo su Base ed Extra, ordinati per punteggio reale.")
     st.balloons()
 
 # Tabelle Premi Ufficiali
