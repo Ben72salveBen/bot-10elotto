@@ -8,8 +8,8 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Strategia Streak (2 Colpi)",
-    page_icon="🔥",
+    page_title="Bot 10eLotto - Sinergia Base + Extra",
+    page_icon="🌟",
     layout="centered"
 )
 
@@ -147,47 +147,39 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ====================================================================
-# NUOVA STRATEGIA: STREAK 2 COLPI (INCLUSA ULTIMA, ESCLUSI 3+ DI FILA)
+# NUOVA STRATEGIA: SINERGIA BASE + EXTRA (INCLUSA ULTIMA ESTRAZIONE)
 # ====================================================================
 def elabora_previsione(quantita_numeri):
     archivio_completo = carica_archivio()
+    lookback = 8  # Analizziamo le ultime 8 estrazioni
     
-    if len(archivio_completo) < 5:
-        st.warning("Servono almeno 5 estrazioni in archivio per calcolare le ripetizioni consecutive!")
+    if len(archivio_completo) < lookback:
+        st.warning(f"Servono almeno {lookback} estrazioni in archivio!")
         return
 
-    st.info("🔥 Analisi in corso: cerchiamo i numeri usciti per 2 volte di fila (puntando alla 3ª) ed escludendo quelli usciti 3+ volte...")
+    st.info("🌟 Analisi Sinergia Base + Extra (inclusa l'ultima estrazione) in corso...")
 
-    punteggio = {}
+    # Prendiamo le ultime 8 estrazioni (incluso l'indice -1, cioè l'ultima uscita)
+    ultime_otto = archivio_completo[-lookback:]
+
+    punteggio = defaultdict(float)
     
-    for num in range(1, 91):
-        # Calcoliamo quante volte di fila il numero è uscito partendo dall'ultima estrazione (archivio[-1]) all'indietro
-        streak = 0
-        offset = 1
-        while len(archivio_completo) >= offset:
-            estrazione_corrente = archivio_completo[-offset]['numeri']
-            if num in estrazione_corrente:
-                streak += 1
-                offset += 1
-            else:
-                break
+    for idx, ext in enumerate(ultime_otto):
+        # idx 7 = ultimissima estrazione, idx 0 = 8 estrazioni fa
+        # Più l'estrazione è recente, più il peso è alto
+        peso_recenza = 1.0 + (idx * 0.3) 
         
-        # Regole impostate:
-        # - Se streak >= 3 (usciti 3 o più volte di fila): NON LI GIOCHIAMO (esclusi con -999)
-        # - Se streak == 2 (usciti 2 volte di fila, puntiamo alla 3ª): Priorità massima (+100)
-        # - Altri casi: Priorità inferiore o 0
-        if streak >= 3:
-            punteggio[num] = -999.0  # Scartati severamente
-        elif streak == 2:
-            punteggio[num] = 100.0   # Target ideale: obiettivo 3ª comparsa!
-        elif streak == 1:
-            punteggio[num] = 10.0    # Usciti solo nell'ultima estrazione
-        else:
-            punteggio[num] = 0.0     # Mai usciti di recente
+        # Punti per i numeri usciti nella Base
+        for n in ext['numeri']:
+            punteggio[int(n)] += (2.0 * peso_recenza)
+            
+        # Punti extra (bonus) per i numeri usciti nei concorsi Extra
+        for n in ext.get('extra', []):
+            punteggio[int(n)] += (1.5 * peso_recenza)
 
-    # Filtriamo ed ordiniamo escludendo i numeri banditi (-999)
+    # Ordinamento in base al punteggio totale di sinergia Base + Extra
     classifica = sorted(
-        [n for n in range(1, 91) if punteggio[n] > -500],
+        range(1, 91),
         key=lambda i: (-punteggio[i], i)
     )
 
@@ -196,11 +188,11 @@ def elabora_previsione(quantita_numeri):
 
     st.session_state['ultima_previsione'] = migliori
 
-    st.markdown(f"### 🔥 PREVISIONE STREAK ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🌟 PREVISIONE SINERGIA BASE + EXTRA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
     
-    st.caption("Numeri selezionati tra quelli ripetuti esattamente per 2 estrazioni di fila (escludendo quelli a streak 3+).")
+    st.caption("Numeri calcolati combinando la frequenza e la convergenza tra le estrazioni Base e le estrazioni Extra recenti.")
     st.balloons()
 
 # Tabelle Premi Ufficiali
@@ -217,8 +209,8 @@ tabelle_extra = {
 }
 
 # Interfaccia
-st.title("🔥 Bot 10eLotto - Strategia Streak (2 Colpi)")
-st.write("Target: Numeri alla 3ª ripetizione consecutiva (esclusi i 3+ di fila).")
+st.title("🌟 Bot 10eLotto - Sinergia Base + Extra")
+st.write("Strategia unificata basata sulla convergenza tra numeri Base e Extra recenti.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -258,7 +250,7 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Calcolo Streak in corso..."):
+        with st.spinner("Calcolo Sinergia in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Verifica Ultima Previsione":
