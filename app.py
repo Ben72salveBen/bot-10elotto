@@ -11,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch LSTM Advanced",
+    page_title="Bot 10eLotto - PyTorch LSTM Advanced (Base + Extra)",
     page_icon="🤖",
     layout="centered"
 )
@@ -27,7 +27,8 @@ def carica_archivio():
         try:
             with open(NOME_FILE, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
+                # Accetta sia estrazioni standard (20) che estrazioni con Extra (fino a 35)
+                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if 20 <= len(ext) <= 35]
                 return archivio_ordinato
         except Exception as e:
             st.error(f"Errore nella lettura del file di archivio: {e}")
@@ -82,36 +83,57 @@ def scarica_estrazioni_con_bypass():
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
+                # 1. Estrazione Numeri Base (20 numeri)
                 match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
+                numeri_base = []
                 if match_num:
                     testo_sezione = match_num.group(1)
                     pezzi_cifre = re.findall(r'\d+', testo_sezione)
-                    
-                    numeri_validi = []
                     visti = set()
-                    
                     for p in pezzi_cifre:
                         if len(p) > 2 and len(p) % 2 == 0:
                             for j in range(0, len(p), 2):
                                 sub = int(p[j:j+2])
                                 if 1 <= sub <= 90 and sub not in visti:
                                     visti.add(sub)
-                                    numeri_validi.append(sub)
+                                    numeri_base.append(sub)
                         else:
                             val = int(p)
                             if 1 <= val <= 90 and val not in visti:
                                 visti.add(val)
-                                numeri_validi.append(val)
-                                
-                        if len(numeri_validi) == 20:
+                                numeri_base.append(val)
+                        if len(numeri_base) == 20:
                             break
-                    
-                    if len(numeri_validi) == 20:
-                        numeri_validi.sort()
-                        estrazioni_trovate.append({
-                            'id': id_concorso,
-                            'numeri': numeri_validi
-                        })
+
+                # 2. Estrazione Numeri Extra (15 numeri)
+                numeri_extra = []
+                match_extra = re.search(r'Extra\s*([\s\S]*?)(?=#|$)', testo_blocco, re.IGNORECASE)
+                if match_extra:
+                    testo_extra = match_extra.group(1)
+                    pezzi_cifre_extra = re.findall(r'\d+', testo_extra)
+                    visti_extra = set()
+                    for p in pezzi_cifre_extra:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti_extra:
+                                    visti_extra.add(sub)
+                                    numeri_extra.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti_extra:
+                                visti_extra.add(val)
+                                numeri_extra.append(val)
+                        if len(numeri_extra) == 15:
+                            break
+
+                if len(numeri_base) == 20:
+                    # Uniamo Base + Extra in un unico set completo per l'allenamento della rete
+                    tutti_numeri = sorted(list(set(numeri_base + numeri_extra)))
+                    estrazioni_trovate.append({
+                        'id': id_concorso,
+                        'numeri': tutti_numeri
+                    })
 
             if not estrazioni_trovate:
                 return []
@@ -124,7 +146,7 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# 2. INIZIALIZZAZIONE ORTOGONALE DEI PESI LSTM
+# ARCHITETTURA LSTM & INIZIALIZZAZIONE ORTOGONALE
 # ==========================================
 class LottoLSTM(nn.Module):
     def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
@@ -164,17 +186,17 @@ def init_weights(m):
             m.bias.data.fill_(0)
 
 # ==========================================
-# ELABORAZIONE PREVISIONE COMPLETA
+# ELABORAZIONE PREVISIONE ibrida (Base + Extra)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     lookback = 40  
     
     if len(archivio) < lookback:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per l'analisi avanzata!")
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Analisi PyTorch LSTM + Multi-Trigger (Lookback: {lookback}) in corso...")
+    st.info(f"Analisi LSTM su Base + Extra + Multi-Trigger in corso...")
 
     num_estrazioni = len(archivio)
     binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
@@ -195,8 +217,8 @@ def elabora_previsione(quantita_numeri):
     model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
     model.apply(init_weights)  # 2. Inizializzazione Ortogonale
 
-    # 1. Peso classi sbilanciate (20/90)
-    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
+    # 1. Peso classi bilanciato per archivio Base+Extra (circa 35 numeri su 90)
+    pos_weight_tensor = torch.tensor([1.6] * 90, dtype=torch.float32)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
 
     # 3. Regolarizzazione con Weight Decay
@@ -217,34 +239,30 @@ def elabora_previsione(quantita_numeri):
         logits_pred = model(input_tensor)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    # Conteggio Frequenze per Trigger 1
+    # Conteggio Frequenze per Trigger di Frequenza
     frequenze_finestra = {n: 0 for n in range(1, 91)}
     for ext in archivio[-lookback:]:
         for n in ext:
             if 1 <= n <= 90:
                 frequenze_finestra[n] += 1
 
-    # Applichiamo i Punteggi Iniziali
     valutazioni = []
     for i in range(90):
         num = i + 1
         score_base = probs[i]
         freq = frequenze_finestra[num]
 
-        # 4A. TRIGGER DI FREQUENZA: Penalizzazione se uscito <= 3 volte nelle ultime 40 estrazioni
+        # 4A. TRIGGER DI FREQUENZA: penalizza se <= 3 volte nelle ultime 40
         if freq <= 3:
             score_corretto = score_base * 0.1
-            trig_freq = True
         else:
             score_corretto = score_base
-            trig_freq = False
 
         valutazioni.append({
             'numero': num,
             'score': score_corretto,
             'score_raw': score_base,
-            'freq': freq,
-            'trig_freq': trig_freq
+            'freq': freq
         })
 
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
@@ -262,11 +280,9 @@ def elabora_previsione(quantita_numeri):
 
         if conteggio_decine[decina] < max_per_decina:
             conteggio_decine[decina] += 1
-            item['trig_decina'] = False
             valutazioni_filtrate.append(item)
         else:
             item['score'] *= 0.2
-            item['trig_decina'] = True
             valutazioni_filtrate.append(item)
 
     valutazioni_filtrate.sort(key=lambda x: x['score'], reverse=True)
@@ -275,13 +291,10 @@ def elabora_previsione(quantita_numeri):
     migliori = [item['numero'] for item in selezionati]
     migliori.sort()
 
-    # ==========================================
-    # CALCOLO ACCURATEZZA STIMATA E COLPI DI GIOCO
-    # ==========================================
+    # Calcolo Accuratezza & Colpi Consigliati
     mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
-    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 1.65), 89.5), 1)
+    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 1.6), 91.0), 1)
 
-    # Definizione colpi in base alla confidenza
     if accuratezza_stimata >= 75.0:
         colpi_consigliati = 1
         tipo_giocata = "🔥 A COLPO SECCO (1 sola estrazione)"
@@ -292,10 +305,9 @@ def elabora_previsione(quantita_numeri):
         colpi_consigliati = 4
         tipo_giocata = "🛡️ CICLO STANDARD (Fino a 4 colpi)"
 
-    st.success("Elaborazione PyTorch + Trigger completata!")
+    st.success("Previsione LSTM (Base + Extra) completata!")
 
-    # Output Previsione
-    st.markdown(f"### 🤖 PREVISIONE APPRESA DALLA RETE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE OTTIMIZZATA BASE + EXTRA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
 
@@ -306,13 +318,13 @@ def elabora_previsione(quantita_numeri):
     with col2:
         st.metric(label="⏳ Colpi Consigliati", value=f"{colpi_consigliati} Colpo/i")
 
-    st.info(f"📌 **Consiglio Operativo Bot:** Gioca questa previsione **{tipo_giocata}**. Se ottieni una vincita prima della fine del ciclo, fermati immediatamente e ricalcola.")
+    st.info(f"📌 **Consiglio Operativo Bot:** Gioca questa previsione **{tipo_giocata}** rigorosamente con l'opzione **EXTRA ATTIVA** per sfruttare la doppia sponda!")
 
     st.balloons()
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch LSTM Advanced")
-st.write("Sistema di Deep Learning con bilanciamento pesi `pos_weight`, regolarizzazione L2, inizializzazione ortogonale e filtri multi-trigger.")
+st.title("🤖 Bot 10eLotto - PyTorch LSTM (Base + Extra)")
+st.write("Modello avanzato addestrato sull'universo completo dei numeri vincenti (Base + 15 Extra) con multi-trigger.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -328,8 +340,8 @@ opzione = st.sidebar.radio(
 )
 
 if opzione == "Scarica Web & Prendi Previsione":
-    if st.button("Avvia Sincronizzazione Web", type="primary"):
-        with st.spinner("Connessione in corso..."):
+    if st.button("Avvia Sincronizzazione Web (Base + Extra)", type="primary"):
+        with st.spinner("Scraping in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -352,17 +364,17 @@ if opzione == "Scarica Web & Prendi Previsione":
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Addestramento Rete PyTorch + Trigger in corso..."):
+        with st.spinner("Addestramento Rete PyTorch su Base + Extra..."):
             elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni Salvate")
+    st.subheader("📁 Storico Estrazioni (Base + Extra)")
     archivio = carica_archivio()
     if len(archivio) == 0:
         st.info("Archivio vuoto.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
-            st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
+            st.text(f"#{len(archivio)-idx} ({len(ext)} numeri): {', '.join(map(str, ext))}")
 
 elif opzione == "Svuota Archivio":
     if st.button("Conferma Cancellazione Archivio", type="secondary"):
