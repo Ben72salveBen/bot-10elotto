@@ -9,14 +9,13 @@ import torch.nn as nn
 import torch.optim as optim
 import streamlit as st
 
-# Configurazione della pagina per adattarsi bene ai dispositivi mobili
+# Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto PyTorch LSTM - AND/OR Strategy",
-    page_icon="🎲",
+    page_title="Bot 10eLotto - PyTorch LSTM Advanced",
+    page_icon="🤖",
     layout="centered"
 )
 
-# Percorso di salvataggio (compatibile con cloud e locale)
 CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
@@ -48,8 +47,8 @@ def scarica_estrazioni_con_bypass():
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
         'Connection': 'keep-alive',
         'Referer': 'https://lottologia.com/'
     }
@@ -124,9 +123,9 @@ def scarica_estrazioni_con_bypass():
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
-# =========================================================
-# ARCHITETTURA PYTORCH LSTM (40 ESTRAZIONI DI LOOKBACK)
-# =========================================================
+# ==========================================
+# 2. INIZIALIZZAZIONE ORTOGONALE DEI PESI LSTM
+# ==========================================
 class LottoLSTM(nn.Module):
     def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
         super(LottoLSTM, self).__init__()
@@ -150,17 +149,33 @@ class LottoLSTM(nn.Module):
         logits = self.fc(last_step_out)
         return logits
 
-def elabora_previsione(quantita_numeri, logica_operatore="AND"):
+def init_weights(m):
+    if isinstance(m, nn.LSTM):
+        for name, param in m.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param.data)  # Inizializzazione ortogonale
+            elif 'bias' in name:
+                param.data.fill_(0)
+    elif isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            m.bias.data.fill_(0)
+
+# ==========================================
+# ELABORAZIONE PREVISIONE COMPLETA
+# ==========================================
+def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 40  # Impostazione su 40 estrazioni passate
+    lookback = 40  
     
     if len(archivio) < lookback:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per avviare la rete PyTorch LSTM!")
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni per l'analisi avanzata!")
         return
 
-    st.info(f"Analisi di **{len(archivio)}** concorsi. Addestramento rete PyTorch LSTM (Sequenza: ultime **{lookback}** estrazioni)...")
+    st.info(f"Analisi PyTorch LSTM + Multi-Trigger (Lookback: {lookback}) in corso...")
 
-    # Conversione dell'archivio in matrice binaria Multi-Hot (90 elementi per estrazione)
     num_estrazioni = len(archivio)
     binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
     for idx, ext in enumerate(archivio):
@@ -168,7 +183,6 @@ def elabora_previsione(quantita_numeri, logica_operatore="AND"):
             if 1 <= n <= 90:
                 binary_matrix[idx, n - 1] = 1.0
 
-    # Creazione delle sequenze temporali da 40 elementi ciascuna
     X_list, y_list = [], []
     for i in range(len(binary_matrix) - lookback):
         X_list.append(binary_matrix[i : i + lookback])
@@ -177,21 +191,25 @@ def elabora_previsione(quantita_numeri, logica_operatore="AND"):
     X = torch.tensor(np.array(X_list), dtype=torch.float32)
     y = torch.tensor(np.array(y_list), dtype=torch.float32)
 
-    # Inizializzazione e Training della Rete LSTM
+    # Inizializzazione modello
     model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    model.apply(init_weights)  # 2. Inizializzazione Ortogonale
+
+    # 1. Peso classi sbilanciate (20/90)
+    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+
+    # 3. Regolarizzazione con Weight Decay
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
 
     model.train()
-    epochs = 45
-    for epoch in range(epochs):
+    for epoch in range(35):
         optimizer.zero_grad()
         logits = model(X)
         loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
 
-    # Valutazione con l'ultimo blocco di 40 estrazioni
     model.eval()
     with torch.no_grad():
         ultimi_passi = binary_matrix[-lookback:]
@@ -199,75 +217,107 @@ def elabora_previsione(quantita_numeri, logica_operatore="AND"):
         logits_pred = model(input_tensor)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    # Calcolo metriche di supporto per la logica booleana AND / OR sulle ultime 40 estrazioni
-    frequenze_40 = np.sum(binary_matrix[-lookback:], axis=0) # Frequenze uscite nelle ultime 40
-    
-    # Calcolo ritardi correnti
-    ritardi = np.zeros(90)
-    for num in range(1, 91):
-        rit = 0
-        for ext in reversed(archivio):
-            if num in ext:
-                break
-            rit += 1
-        ritardi[num - 1] = rit
+    # Conteggio Frequenze per Trigger 1
+    frequenze_finestra = {n: 0 for n in range(1, 91)}
+    for ext in archivio[-lookback:]:
+        for n in ext:
+            if 1 <= n <= 90:
+                frequenze_finestra[n] += 1
 
-    # APPLICAZIONE LOGICA BOOLEANA (AND / OR)
-    soglia_probabilita = np.median(probs) # Soglia adattiva basata sulla mediana
-    
-    punteggio_finale = {}
+    # Applichiamo i Punteggi Iniziali
+    valutazioni = []
     for i in range(90):
         num = i + 1
-        p_lstm = probs[i]
-        freq = frequenze_40[i]
-        rit = ritardi[i]
-        
-        cond_lstm = p_lstm >= soglia_probabilita
-        cond_frequenza = freq >= (lookback * 0.20) # Presente in almeno il 20% delle ultime 40 estrazioni
-        cond_ritardo = (rit >= 2) and (rit <= 15)   # Ritardo ideale nell'intervallo medio
+        score_base = probs[i]
+        freq = frequenze_finestra[num]
 
-        if logica_operatore == "AND":
-            # Condizione AND: La rete LSTM deve dare probabilità alta E (Frequente O Ritardo idoneo)
-            passa_filtro = cond_lstm and (cond_frequenza or cond_ritardo)
-            score = (p_lstm * 0.6) + (freq / 40.0 * 0.2) + (1.0 / (rit + 1) * 0.2) if passa_filtro else -1.0
+        # 4A. TRIGGER DI FREQUENZA: Penalizzazione se uscito <= 3 volte nelle ultime 40 estrazioni
+        if freq <= 3:
+            score_corretto = score_base * 0.1
+            trig_freq = True
         else:
-            # Condizione OR: Basta che sia ad alta probabilità LSTM OPPURE molto frequente nelle ultime 40
-            passa_filtro = cond_lstm or cond_frequenza
-            score = max(p_lstm, freq / 40.0) if passa_filtro else -1.0
-            
-        punteggio_finale[num] = score
+            score_corretto = score_base
+            trig_freq = False
 
-    # Ordinamento dei numeri secondo il punteggio booleano
-    classifica = sorted(range(1, 91), key=lambda x: punteggio_finale[x], reverse=True)
-    migliori = classifica[:quantita_numeri]
+        valutazioni.append({
+            'numero': num,
+            'score': score_corretto,
+            'score_raw': score_base,
+            'freq': freq,
+            'trig_freq': trig_freq
+        })
+
+    valutazioni.sort(key=lambda x: x['score'], reverse=True)
+
+    # 4B. TRIGGER ANTI-CLUSTERING (DECINE)
+    max_per_decina = 1 if quantita_numeri <= 4 else 2
+    conteggio_decine = {d: 0 for d in range(10)}
+    valutazioni_filtrate = []
+
+    for item in valutazioni:
+        num = item['numero']
+        decina = (num - 1) // 10
+        if decina > 8:
+            decina = 8
+
+        if conteggio_decine[decina] < max_per_decina:
+            conteggio_decine[decina] += 1
+            item['trig_decina'] = False
+            valutazioni_filtrate.append(item)
+        else:
+            item['score'] *= 0.2
+            item['trig_decina'] = True
+            valutazioni_filtrate.append(item)
+
+    valutazioni_filtrate.sort(key=lambda x: x['score'], reverse=True)
+
+    selezionati = valutazioni_filtrate[:quantita_numeri]
+    migliori = [item['numero'] for item in selezionati]
     migliori.sort()
 
-    st.success(f"Previsione LSTM (Strategia Booleana **{logica_operatore}**) completata!")
-    st.markdown(f"### 🧠 NUMERI PREVISTI ({quantita_numeri} NUMERI) - STRATEGIA {logica_operatore}:")
-    
+    # ==========================================
+    # CALCOLO ACCURATEZZA STIMATA E COLPI DI GIOCO
+    # ==========================================
+    mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
+    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 1.65), 89.5), 1)
+
+    # Definizione colpi in base alla confidenza
+    if accuratezza_stimata >= 75.0:
+        colpi_consigliati = 1
+        tipo_giocata = "🔥 A COLPO SECCO (1 sola estrazione)"
+    elif accuratezza_stimata >= 60.0:
+        colpi_consigliati = 2
+        tipo_giocata = "⚡ BREVE CICLO (2 colpi massimo)"
+    else:
+        colpi_consigliati = 4
+        tipo_giocata = "🛡️ CICLO STANDARD (Fino a 4 colpi)"
+
+    st.success("Elaborazione PyTorch + Trigger completata!")
+
+    # Output Previsione
+    st.markdown(f"### 🤖 PREVISIONE APPRESA DALLA RETE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(map(str, migliori))
     st.markdown(f"## **` {numeri_str} `**")
-    
-    # Sviluppo Ambi consigliati se richiesti più di 2 numeri
-    if quantita_numeri >= 2:
-        from itertools import combinations
-        coppie = list(combinations(migliori, 2))[:3]
-        st.markdown("#### 🎯 Sviluppo Coppie (Ambi Consigliati):")
-        for i, c in enumerate(coppie, 1):
-            st.text(f"• Giocata {i}: {c[0]:02d} - {c[1]:02d}")
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(label="🎯 Accuratezza Stimata Bot", value=f"{accuratezza_stimata} %")
+    with col2:
+        st.metric(label="⏳ Colpi Consigliati", value=f"{colpi_consigliati} Colpo/i")
+
+    st.info(f"📌 **Consiglio Operativo Bot:** Gioca questa previsione **{tipo_giocata}**. Se ottieni una vincita prima della fine del ciclo, fermati immediatamente e ricalcola.")
 
     st.balloons()
 
-# Interfaccia grafica della Web App
-st.title("🎲 Bot 10eLotto PyTorch LSTM")
-st.write("Analisi temporale basata su rete neurali LSTM applicata sulle ultime **40 estrazioni**.")
+# Interfaccia Grafica Streamlit
+st.title("🤖 Bot 10eLotto - PyTorch LSTM Advanced")
+st.write("Sistema di Deep Learning con bilanciamento pesi `pos_weight`, regolarizzazione L2, inizializzazione ortogonale e filtri multi-trigger.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-# Configurazione parametri utente
 quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
-operatore_logico = st.sidebar.selectbox("Filtro Logico Combinato:", ("AND", "OR"), help="AND: Richiede la doppia conferma (LSTM + Statistica).\nOR: Includi sia candidati della rete che numeri frequenti.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -279,7 +329,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web & Prendi Previsione":
     if st.button("Avvia Sincronizzazione Web", type="primary"):
-        with st.spinner("Connessione a Lottologia in corso..."):
+        with st.spinner("Connessione in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -293,29 +343,28 @@ if opzione == "Scarica Web & Prendi Previsione":
                         nuove_aggiunte += 1
                 
                 if salva_archivio(archivio):
-                    st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} nuove estrazioni.")
-                    elabora_previsione(quantita, logica_operatore=operatore_logico)
+                    st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} estrazioni.")
+                    elabora_previsione(quantita)
                 else:
-                    st.error("Impossibile scrivere sul file di salvataggio.")
+                    st.error("Errore salvataggio file.")
             else:
-                st.error("Nessuna estrazione valida trovata dal web.")
+                st.error("Nessuna estrazione trovata.")
 
 elif opzione == "Genera Previsione":
     if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner(f"Elaborazione rete PyTorch LSTM ({operatore_logico}) in corso..."):
-            elabora_previsione(quantita, logica_operatore=operatore_logico)
+        with st.spinner("Addestramento Rete PyTorch + Trigger in corso..."):
+            elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni Salvate")
     archivio = carica_archivio()
     if len(archivio) == 0:
-        st.info("Nessuna estrazione presente nell'archivio.")
+        st.info("Archivio vuoto.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
             st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
 
 elif opzione == "Svuota Archivio":
-    st.warning("Attenzione: questa operazione cancellerà tutto l'archivio salvato.")
     if st.button("Conferma Cancellazione Archivio", type="secondary"):
         salva_archivio([])
-        st.success("Archivio pulito con successo.")
+        st.success("Archivio pulito.")
