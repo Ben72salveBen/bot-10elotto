@@ -1,7 +1,8 @@
 import os
 import json
-import requests
-from bs4 import BeautifulSoup
+import re
+import urllib.request
+import ssl
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch (Scraping Avanzato)",
+    page_title="Bot 10eLotto - PyTorch (Training sui Primi 6)",
     page_icon="🤖",
     layout="centered"
 )
@@ -59,9 +60,6 @@ def carica_giocata():
             return None
     return None
 
-# ==========================================
-# SCRAPING PROFESSIONALE CON BEAUTIFULSOUP
-# ==========================================
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
     
@@ -69,63 +67,63 @@ def scarica_estrazioni_con_bypass():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
+        'Connection': 'keep-alive',
+        'Referer': 'https://lottologia.com/'
     }
     
+    req = urllib.request.Request(url, headers=headers)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            st.error(f"Errore HTTP dal sito: {response.status_code}")
-            return []
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            html = response.read().decode('utf-8', 'ignore')
             
-        soup = BeautifulSoup(response.text, 'html.parser')
-        estrazioni_trovate = []
-        
-        # Cerca tutti i blocchi di concorso nella pagina usando i selettori HTML reali
-        # Di solito le estrazioni sono contenute in elementi con ID o classi specifiche
-        elementi_estrazione = soup.find_all(['div', 'tr', 'li'], string=lambda t: t and 'Numeri' in t)
-        
-        if not elementi_estrazione:
-            # Fallivo fallback: cerca nei blocchi di testo strutturati
-            testo_pagina = soup.get_text()
-            # Cerca pattern di estrazioni nel testo pulito
-            import re
-            pattern_concorsi = re.findall(r'#(\d+)\s*[-]?\s*([\s\S]*?)(?=#\d+|\Z)', testo_pagina)
+            if "Domande Frequenti" in html:
+                html = html.split("Domande Frequenti")[0]
+            elif "domande frequenti" in html:
+                html = html.split("domande frequenti")[0]
+                
+            if "Seleziona Numeri" in html:
+                html = html.split("Seleziona Numeri")[-1]
+            elif "seleziona numeri" in html:
+                html = html.split("seleziona numeri")[-1]
             
-            for id_str, contenuto in pattern_concorsi:
-                cifre = re.findall(r'\b([0-9]{1,2})\b', contenuto)
-                numeri_validi = []
-                visti = set()
-                for c in cifre:
-                    val = int(c)
-                    if 1 <= val <= 90 and val not in visti:
-                        visti.add(val)
-                        numeri_validi.append(val)
-                    if len(numeri_validi) == 20:
-                        break
-                if len(numeri_validi) == 20:
-                    numeri_validi.sort()
-                    estrazioni_trovate.append({
-                        'id': int(id_str),
-                        'numeri': numeri_validi
-                    })
-        else:
-            for el in elementi_estrazione:
-                # Estrae l'ID e i numeri dal blocco HTML
-                testo_blocco = el.get_text()
-                import re
-                id_match = re.search(r'#(\d+)', str(el.parent))
-                if id_match:
-                    id_concorso = int(id_match.group(1))
-                    cifre = re.findall(r'\b([0-9]{1,2})\b', testo_blocco)
+            estrazioni_trovate = []
+            blocchi = re.split(r'#(\d+)', html)
+            
+            for i in range(1, len(blocchi), 2):
+                id_concorso = int(blocchi[i])
+                testo_blocco = blocchi[i+1]
+                
+                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
+                    continue
+                
+                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
+                if match_num:
+                    testo_sezione = match_num.group(1)
+                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    
                     numeri_validi = []
                     visti = set()
-                    for c in cifre:
-                        val = int(c)
-                        if 1 <= val <= 90 and val not in visti:
-                            visti.add(val)
-                            numeri_validi.append(val)
+                    
+                    for p in pezzi_cifre:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti:
+                                    visti.add(sub)
+                                    numeri_validi.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti:
+                                visti.add(val)
+                                numeri_validi.append(val)
+                                
                         if len(numeri_validi) == 20:
                             break
+                    
                     if len(numeri_validi) == 20:
                         numeri_validi.sort()
                         estrazioni_trovate.append({
@@ -133,43 +131,11 @@ def scarica_estrazioni_con_bypass():
                             'numeri': numeri_validi
                         })
 
-        # Metodo di riserva robusto se il parsing HTML specifico fallisce
-        if not estrazioni_trovate:
-            righe = response.text.split('\n')
-            # Scansione riga per riga alla ricerca di sequenze numeriche valide di 20 elementi
-            pass
+            if not estrazioni_trovate:
+                return []
 
-        if not estrazioni_trovate:
-            # Sfruttiamo un parsing diretto basato su regex pulita sull'intero documento HTML ripulito
-            import re
-            match_blocchi = re.finditer(r'#(\d+)', response.text)
-            posizioni = [m.start() for m in match_blocchi]
-            
-            for idx_p, pos in enumerate(posizioni):
-                fine = posizioni[idx_p + 1] if idx_p + 1 < len(posizioni) else len(response.text)
-                blocco = response.text[pos:fine]
-                if "Numeri" in blocco or "numeri" in blocco:
-                    id_c = int(re.search(r'#(\d+)', blocco).group(1))
-                    cifre = re.findall(r'\b([0-9]{1,2})\b', blocco)
-                    nums = []
-                    visti = set()
-                    for c in cifre:
-                        val = int(c)
-                        if 1 <= val <= 90 and val not in visti:
-                            visti.add(val)
-                            nums.append(val)
-                        if len(nums) == 20:
-                            break
-                    if len(nums) == 20:
-                        nums.sort()
-                        estrazioni_trovate.append({'id': id_c, 'numeri': nums})
-
-        if not estrazioni_trovate:
-            return []
-
-        # Ordina per ID concorso crescente per mantenere la cronologia esatta
-        estrazioni_trovate.sort(key=lambda x: x['id'])
-        return [item['numeri'] for item in estrazioni_trovate]
+            estrazioni_trovate.sort(key=lambda x: x['id'])
+            return [item['numeri'] for item in estrazioni_trovate]
 
     except Exception as e:
         st.error(f"Errore di connessione durante lo scraping: {e}")
@@ -179,7 +145,7 @@ def scarica_estrazioni_con_bypass():
 # ARCHITETTURA LSTM CON MEMORIA PERSISTENTE
 # ==========================================
 class LottoLSTM(nn.Module):
-    def __init__(self, input_dim=90, hidden_dim=64, num_layers=2, output_dim=90, dropout=0.1):
+    def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
         super(LottoLSTM, self).__init__()
         self.lstm = nn.LSTM(
             input_size=input_dim,
@@ -189,10 +155,10 @@ class LottoLSTM(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0
         )
         self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, 32),
+            nn.Linear(hidden_dim, 64),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(32, output_dim)
+            nn.Linear(64, output_dim)
         )
 
     def forward(self, x):
@@ -241,24 +207,26 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE
+# ELABORAZIONE PREVISIONE (Training sui Primi 6)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 4  
+    lookback = 40  
     
-    if len(archivio) < (lookback + 5):
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 5} estrazioni per l'analisi.")
+    if len(archivio) < lookback:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Addestramento PyTorch LSTM focalizzato sulle dinamiche recenti (20 numeri base)...")
+    st.info(f"Addestramento PyTorch LSTM sui primi 6 numeri ordinati di ogni estrazione...")
 
-    archivio_recente = archivio[-20:]
-    num_estrazioni = len(archivio_recente)
-    
+    num_estrazioni = len(archivio)
     binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
-    for idx, ext in enumerate(archivio_recente):
-        for n in ext:
+    
+    # MODIFICA CHIAVE: La rete si addestra SOLO sui primi 6 numeri in ordine crescente di ogni estrazione
+    for idx, ext in enumerate(archivio):
+        ext_ordinati = sorted(ext)
+        primi_6 = ext_ordinati[:6]
+        for n in primi_6:
             if 1 <= n <= 90:
                 binary_matrix[idx, n - 1] = 1.0
 
@@ -270,22 +238,23 @@ def elabora_previsione(quantita_numeri):
     X = torch.tensor(np.array(X_list), dtype=torch.float32)
     y = torch.tensor(np.array(y_list), dtype=torch.float32)
 
-    model = LottoLSTM(input_dim=90, hidden_dim=64, num_layers=2)
+    model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
     
     if os.path.exists(NOME_FILE_MODELLO):
         try:
             model.load_state_dict(torch.load(NOME_FILE_MODELLO))
-            epoche_training = 15 
+            epoche_training = 10
         except Exception:
             model.apply(init_weights)
-            epoche_training = 40
+            epoche_training = 35
     else:
         model.apply(init_weights)
-        epoche_training = 40
+        epoche_training = 35
 
-    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
+    # Pos weight ricalcolato per dati più sparsi (6 numeri su 90)
+    pos_weight_tensor = torch.tensor([8.0] * 90, dtype=torch.float32)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
 
     model.train()
     for epoch in range(epoche_training):
@@ -299,19 +268,14 @@ def elabora_previsione(quantita_numeri):
 
     model.eval()
     with torch.no_grad():
-        binary_matrix_totale = np.zeros((len(archivio), 90), dtype=np.float32)
-        for idx, ext in enumerate(archivio):
-            for n in ext:
-                if 1 <= n <= 90:
-                    binary_matrix_totale[idx, n - 1] = 1.0
-                    
-        ultimi_passi = binary_matrix_totale[-lookback:]
+        ultimi_passi = binary_matrix[-lookback:]
         input_tensor = torch.tensor(ultimi_passi, dtype=torch.float32).unsqueeze(0)
         logits_pred = model(input_tensor)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
+    # Frequenze per Trigger
     frequenze_finestra = {n: 0 for n in range(1, 91)}
-    for ext in archivio[-10:]:
+    for ext in archivio[-lookback:]:
         for n in ext:
             if 1 <= n <= 90:
                 frequenze_finestra[n] += 1
@@ -322,8 +286,8 @@ def elabora_previsione(quantita_numeri):
         score_base = probs[i]
         freq = frequenze_finestra[num]
 
-        if freq == 0:
-            score_corretto = score_base * 0.2
+        if freq <= 3:
+            score_corretto = score_base * 0.1
         else:
             score_corretto = score_base
 
@@ -335,6 +299,7 @@ def elabora_previsione(quantita_numeri):
 
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
+    # Trigger Anti-Clustering (Decine)
     max_per_decina = 1 if quantita_numeri <= 4 else 2
     conteggio_decine = {d: 0 for d in range(10)}
     valutazioni_filtrate = []
@@ -361,24 +326,24 @@ def elabora_previsione(quantita_numeri):
     salva_giocata(migliori)
 
     mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
-    confidenza = round(min(float(mean_raw_score * 100 * 2.2), 95.0), 1)
+    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 2.0), 95.0), 1)
 
-    st.markdown(f"### 🤖 PREVISIONE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE OTTIMIZZATA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.metric(label="🎯 Confidenza del Modello", value=f"{confidenza} %")
+        st.metric(label="🎯 Confidenza del Modello", value=f"{accuratezza_stimata} %")
     with col2:
         st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
 
     st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch (Scraping BeautifulSoup)")
-st.write("Modello con scraping avanzato BeautifulSoup e training sulle estrazioni recenti.")
+st.title("🤖 Bot 10eLotto - PyTorch (Training sui Primi 6)")
+st.write("Modello con memoria persistente addestrato esclusivamente sui primi 6 numeri in ordine crescente di ogni estrazione.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -395,7 +360,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping con BeautifulSoup in corso..."):
+        with st.spinner("Scraping e verifica esito precedente..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -411,8 +376,10 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                if archivio:
-                    verifica_esito_ultima_giocata(archivio[-1])
+                # 1. Verifica immediata dell'esito precedente
+                verifica_esito_ultima_giocata(archivio[-1])
+                
+                # 2. Generazione nuova previsione
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
