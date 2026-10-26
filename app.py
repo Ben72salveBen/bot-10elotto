@@ -4,14 +4,11 @@ import re
 import urllib.request
 import ssl
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
 import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch (Training 20 Numeri - Ultime 5)",
+    page_title="Bot 10eLotto - Catene di Markov",
     page_icon="🤖",
     layout="centered"
 )
@@ -21,7 +18,6 @@ if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
 
 NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
-NOME_FILE_MODELLO = os.path.join(CARTELLA_DOCUMENTI, "modello_lotto.pth")
 NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata.json")
 
 def carica_archivio():
@@ -142,46 +138,6 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# ARCHITETTURA LSTM CON MEMORIA PERSISTENTE
-# ==========================================
-class LottoLSTM(nn.Module):
-    def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
-        super(LottoLSTM, self).__init__()
-        self.lstm = nn.LSTM(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, output_dim)
-        )
-
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        last_step_out = out[:, -1, :]
-        logits = self.fc(last_step_out)
-        return logits
-
-def init_weights(m):
-    if isinstance(m, nn.LSTM):
-        for name, param in m.named_parameters():
-            if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
-            elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
-    elif isinstance(m, nn.Linear):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            m.bias.data.fill_(0)
-
-# ==========================================
 # GESTIONE VERIFICA ULTIMA GIOCATA
 # ==========================================
 def verifica_esito_ultima_giocata(ultima_estrazione):
@@ -203,81 +159,53 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
         st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
         st.balloons()
     else:
-        st.info(f"ℹ️ Risultato: {punti} punti. Il modello ha registrato l'esito per correggere la mira.")
+        st.info(f"ℹ️ Risultato: {punti} punti. Il modello ha registrato l'esito.")
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Training su 20 Numeri - Ultime 5 Estrazioni)
+# ELABORAZIONE PREVISIONE (Catene di Markov)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 4  
     
-    if len(archivio) < (lookback + 5):
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 5} estrazioni!")
+    if len(archivio) < 10:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 10 estrazioni per le Catene di Markov!")
         return
 
-    st.info(f"Addestramento PyTorch LSTM su tutti i 20 numeri base focalizzato sulle ultime 5 estrazioni...")
+    st.info("Calcolo delle probabilità di transizione tramite Catene di Markov...")
 
-    # Focalizziamo il training sulle ultime estrazioni recenti (coda dell'archivio)
-    archivio_recente = archivio[-25:]
-    num_estrazioni = len(archivio_recente)
-    binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
-    
-    # MODIFICA: La rete si addestra su TUTTI I 20 NUMERI BASE di ogni estrazione
-    for idx, ext in enumerate(archivio_recente):
-        for n in ext:
-            if 1 <= n <= 90:
-                binary_matrix[idx, n - 1] = 1.0
+    # Utilizziamo una finestra recente (ultime 30 estrazioni) per la matrice di transizione
+    archivio_recente = archivio[-30:] if len(archivio) >= 30 else archivio
 
-    X_list, y_list = [], []
-    for i in range(len(binary_matrix) - lookback):
-        X_list.append(binary_matrix[i : i + lookback])
-        y_list.append(binary_matrix[i + lookback])
+    # Matrice di transizione 90x90
+    # transizioni[i][j] = quante volte il numero j è uscito al tempo t+1 dato i al tempo t
+    transizioni = np.zeros((90, 90), dtype=np.float32)
 
-    X = torch.tensor(np.array(X_list), dtype=torch.float32)
-    y = torch.tensor(np.array(y_list), dtype=torch.float32)
+    for k in range(len(archivio_recente) - 1):
+        estrazione_corrente = archivio_recente[k]
+        estrazione_successiva = archivio_recente[k+1]
+        
+        for i in estrazione_corrente:
+            if 1 <= i <= 90:
+                for j in estrazione_successiva:
+                    if 1 <= j <= 90:
+                        transizioni[i-1][j-1] += 1.0
 
-    model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
-    
-    if os.path.exists(NOME_FILE_MODELLO):
-        try:
-            model.load_state_dict(torch.load(NOME_FILE_MODELLO))
-            epoche_training = 10
-        except Exception:
-            model.apply(init_weights)
-            epoche_training = 35
-    else:
-        model.apply(init_weights)
-        epoche_training = 35
+    # Smoothing di Laplace per evitare divisioni per zero
+    transizioni += 1.0
 
-    # Pos weight standard per 20 numeri su 90
-    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
+    # Normalizzazione per riga (probabilità condizionata P(j | i))
+    somme_righe = transizioni.sum(axis=1, keepdims=True)
+    matrice_prob = transizioni / somme_righe
 
-    model.train()
-    for epoch in range(epoche_training):
-        optimizer.zero_grad()
-        logits = model(X)
-        loss = criterion(logits, y)
-        loss.backward()
-        optimizer.step()
+    # Stato di partenza: l'ultima estrazione registrata nell'archivio
+    ultima_estrazione = archivio[-1]
 
-    torch.save(model.state_dict(), NOME_FILE_MODELLO)
-
-    model.eval()
-    with torch.no_grad():
-        binary_matrix_totale = np.zeros((len(archivio), 90), dtype=np.float32)
-        for idx, ext in enumerate(archivio):
-            for n in ext:
-                if 1 <= n <= 90:
-                    binary_matrix_totale[idx, n - 1] = 1.0
-
-        ultimi_passi = binary_matrix_totale[-lookback:]
-        input_tensor = torch.tensor(ultimi_passi, dtype=torch.float32).unsqueeze(0)
-        logits_pred = model(input_tensor)
-        probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
+    # Somma delle probabilità di transizione da tutti i numeri dell'ultima estrazione
+    scores_raw = np.zeros(90, dtype=np.float32)
+    for i in ultima_estrazione:
+        if 1 <= i <= 90:
+            scores_raw += matrice_prob[i-1]
 
     # Frequenze calcolate esclusivamente sulle ULTIME 5 ESTRAZIONI più recenti
     frequenze_finestra = {n: 0 for n in range(1, 91)}
@@ -289,10 +217,10 @@ def elabora_previsione(quantita_numeri):
     valutazioni = []
     for i in range(90):
         num = i + 1
-        score_base = probs[i]
+        score_base = scores_raw[i]
         freq = frequenze_finestra[num]
 
-        # Trigger penalizzazione numeri freddi nelle ultime 5 estrazioni
+        # Penalizzazione numeri freddi nelle ultime 5 estrazioni
         if freq == 0:
             score_corretto = score_base * 0.1
         else:
@@ -332,25 +260,25 @@ def elabora_previsione(quantita_numeri):
 
     salva_giocata(migliori)
 
-    mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
-    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 2.0), 95.0), 1)
+    mean_raw_score = np.mean([item['score_raw'] for item in selezionati]) if selezionati else 0
+    confidenza = round(min(float(mean_raw_score * 100 * 4.0), 95.0), 1)
 
-    st.markdown(f"### 🤖 PREVISIONE OTTIMIZZATA ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE MARKOV ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.metric(label="🎯 Confidenza del Modello", value=f"{accuratezza_stimata} %")
+        st.metric(label="🎯 Confidenza del Modello", value=f"{confidenza} %")
     with col2:
         st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
 
     st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch (Training 20 Numeri - Ultime 5)")
-st.write("Modello con memoria persistente addestrato su tutti i 20 numeri base focalizzato sulle ultime 5 estrazioni.")
+st.title("🤖 Bot 10eLotto - Catene di Markov")
+st.write("Modello stocastico basato su matrici di transizione di Markov e frequenze recenti.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -367,7 +295,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e verifica esito precedente..."):
+        with st.spinner("Scraping e calcolo di Markov in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -408,8 +336,6 @@ elif opzione == "Visualizza Archivio":
 elif opzione == "Svuota Archivio":
     if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
         salva_archivio([])
-        if os.path.exists(NOME_FILE_MODELLO):
-            os.remove(NOME_FILE_MODELLO)
         if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
             os.remove(NOME_FILE_ULTIMA_GIOCATA)
-        st.success("Archivio, modello e ultime giocate cancellate con successo.")
+        st.success("Archivio e ultime giocate cancellate con successo.")
