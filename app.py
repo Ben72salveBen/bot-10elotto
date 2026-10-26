@@ -11,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch (Sistema 5 Decine)",
+    page_title="Bot 10eLotto - PyTorch (Training sui Primi 6)",
     page_icon="🤖",
     layout="centered"
 )
@@ -44,10 +44,10 @@ def salva_archivio(archivio):
         st.error(f"Errore salvataggio archivio: {e}")
         return False
 
-def salva_giocata(sistema_decine):
+def salva_giocata(numeri_scelti):
     try:
         with open(NOME_FILE_ULTIMA_GIOCATA, "w", encoding="utf-8") as f:
-            json.dump(sistema_decine, f, ensure_ascii=False, indent=4)
+            json.dump(numeri_scelti, f, ensure_ascii=False, indent=4)
     except Exception as e:
         pass
 
@@ -191,29 +191,25 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
 
     st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
     set_estratto = set(ultima_estrazione)
+    set_giocati = set(ultima_giocata)
     
-    vincite_trovate = False
-
-    for idx, decina in enumerate(ultima_giocata):
-        presi = set(decina).intersection(set_estratto)
-        punti = len(presi)
-        
-        if punti >= 5:
-            vincite_trovate = True
-            st.success(f"🎉 **DECINA {idx+1}: VINCENTE! {punti} PUNTI REALIZZATI!** (Numeri indovinati: {sorted(list(presi))})")
-        else:
-            st.write(f"• Decina {idx+1}: {punti} punti su 10 (Indovinati: {sorted(list(presi)) if punti > 0 else 'Nessuno'})")
-
-    if vincite_trovate:
+    presi = set_giocati.intersection(set_estratto)
+    punti = len(presi)
+    
+    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
+    st.write(f"• Numeri usciti nell'estrazione: {sorted(list(set_estratto))}")
+    
+    if punti >= 2:
+        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
         st.balloons()
     else:
-        st.info("ℹ️ Nessuna decina ha raggiunto la soglia minima di vincita (5 punti). Il modello ha registrato l'errore per correggere la mira.")
+        st.info(f"ℹ️ Risultato: {punti} punti. Il modello ha registrato l'esito per correggere la mira.")
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE CON SISTEMA 5 DECINE
+# ELABORAZIONE PREVISIONE (Training sui Primi 6)
 # ==========================================
-def elabora_previsione():
+def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     lookback = 40  
     
@@ -221,12 +217,16 @@ def elabora_previsione():
         st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Addestramento PyTorch LSTM solo su Base + Generazione Sistema 5 Decine...")
+    st.info(f"Addestramento PyTorch LSTM sui primi 6 numeri ordinati di ogni estrazione...")
 
     num_estrazioni = len(archivio)
     binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
+    
+    # MODIFICA CHIAVE: La rete si addestra SOLO sui primi 6 numeri in ordine crescente di ogni estrazione
     for idx, ext in enumerate(archivio):
-        for n in ext:
+        ext_ordinati = sorted(ext)
+        primi_6 = ext_ordinati[:6]
+        for n in primi_6:
             if 1 <= n <= 90:
                 binary_matrix[idx, n - 1] = 1.0
 
@@ -251,7 +251,8 @@ def elabora_previsione():
         model.apply(init_weights)
         epoche_training = 35
 
-    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
+    # Pos weight ricalcolato per dati più sparsi (6 numeri su 90)
+    pos_weight_tensor = torch.tensor([8.0] * 90, dtype=torch.float32)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
     optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
 
@@ -298,8 +299,8 @@ def elabora_previsione():
 
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
-    # Trigger Anti-Clustering (Decine max 3 numeri sui 20 totali)
-    max_per_decina = 3
+    # Trigger Anti-Clustering (Decine)
+    max_per_decina = 1 if quantita_numeri <= 4 else 2
     conteggio_decine = {d: 0 for d in range(10)}
     valutazioni_filtrate = []
 
@@ -318,37 +319,36 @@ def elabora_previsione():
 
     valutazioni_filtrate.sort(key=lambda x: x['score'], reverse=True)
 
-    # Selezioniamo i TOP 20 NUMERI scelti dall'IA
-    top_20 = [item['numero'] for item in valutazioni_filtrate[:20]]
+    selezionati = valutazioni_filtrate[:quantita_numeri]
+    migliori = [item['numero'] for item in selezionati]
+    migliori.sort()
 
-    # ==========================================
-    # SVILUPPO SISTEMA RIDOTTO (PROPOSTA 1: 5 DECINE)
-    # ==========================================
-    N = top_20
-    d1 = sorted([N[0], N[1], N[2], N[3], N[4], N[5], N[6], N[7], N[8], N[9]])
-    d2 = sorted([N[10], N[11], N[12], N[13], N[14], N[15], N[16], N[17], N[18], N[19]])
-    d3 = sorted([N[0], N[1], N[2], N[3], N[4], N[10], N[11], N[12], N[13], N[14]])
-    d4 = sorted([N[5], N[6], N[7], N[8], N[9], N[15], N[16], N[17], N[18], N[19]])
-    d5 = sorted([N[0], N[2], N[4], N[6], N[8], N[10], N[12], N[14], N[16], N[18]])
+    salva_giocata(migliori)
 
-    sistema_5_decine = [d1, d2, d3, d4, d5]
-    salva_giocata(sistema_5_decine)
+    mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
+    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 2.0), 95.0), 1)
 
-    st.markdown("### 🎯 NUOVO SISTEMA RIDOTTO (5 DECINE PROPOSTA 1):")
-    st.write("I 20 migliori numeri selezionati da PyTorch sono stati sviluppati nelle seguenti 5 schedine:")
+    st.markdown(f"### 🤖 PREVISIONE OTTIMIZZATA ({quantita_numeri} NUMERI):")
+    numeri_str = " - ".join(f"{n:02d}" for n in migliori)
+    st.markdown(f"## **` {numeri_str} `**")
 
-    for idx, dec in enumerate(sistema_5_decine):
-        dec_str = " - ".join(f"{n:02d}" for n in dec)
-        st.markdown(f"**Decina #{idx+1}:** ` {dec_str} `")
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(label="🎯 Confidenza del Modello", value=f"{accuratezza_stimata} %")
+    with col2:
+        st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
 
-    st.info("📌 **Nota Operativa:** Gioca queste 5 decine aggiungendo l'opzione **EXTRA ATTIVA** per massimizzare le probabilità di vincita.")
+    st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch (Sistema 5 Decine)")
-st.write("Addestramento basato unicamente sull'archivio BASE con sviluppo automatico in sistema ridotto a 5 decine.")
+st.title("🤖 Bot 10eLotto - PyTorch (Training sui Primi 6)")
+st.write("Modello con memoria persistente addestrato esclusivamente sui primi 6 numeri in ordine crescente di ogni estrazione.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
+
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -376,21 +376,21 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                # 1. Verifica immediata dell'esito della giocata precedente
+                # 1. Verifica immediata dell'esito precedente
                 verifica_esito_ultima_giocata(archivio[-1])
                 
-                # 2. Generazione della nuova previsione
-                elabora_previsione()
+                # 2. Generazione nuova previsione
+                elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
 
 elif opzione == "Genera Solamente Previsione":
     if st.button("Genera Previsione da Archivio Locale", type="primary"):
-        with st.spinner("Elaborazione sistema in corso..."):
-            elabora_previsione()
+        with st.spinner("Elaborazione previsione in corso..."):
+            elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni (Solo Base)")
+    st.subheader("📁 Storico Estrazioni")
     archivio = carica_archivio()
     if len(archivio) == 0:
         st.info("Archivio vuoto.")
