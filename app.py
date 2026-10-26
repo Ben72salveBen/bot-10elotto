@@ -11,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch (Training sui Primi 6)",
+    page_title="Bot 10eLotto - PyTorch (Training Breve Termine)",
     page_icon="🤖",
     layout="centered"
 )
@@ -145,7 +145,7 @@ def scarica_estrazioni_con_bypass():
 # ARCHITETTURA LSTM CON MEMORIA PERSISTENTE
 # ==========================================
 class LottoLSTM(nn.Module):
-    def __init__(self, input_dim=90, hidden_dim=128, num_layers=2, output_dim=90, dropout=0.2):
+    def __init__(self, input_dim=90, hidden_dim=64, num_layers=2, output_dim=90, dropout=0.1):
         super(LottoLSTM, self).__init__()
         self.lstm = nn.LSTM(
             input_size=input_dim,
@@ -155,10 +155,10 @@ class LottoLSTM(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0
         )
         self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, 64),
+            nn.Linear(hidden_dim, 32),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(64, output_dim)
+            nn.Linear(32, output_dim)
         )
 
     def forward(self, x):
@@ -207,26 +207,25 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Training sui Primi 6)
+# ELABORAZIONE PREVISIONE (Training sulle ultime estrazioni)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 40  
+    lookback = 4  # Finestra ridotta a 4 concorsi per un'analisi ultra-fresca
     
-    if len(archivio) < lookback:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
+    if len(archivio) < (lookback + 5):
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 5} estrazioni per l'analisi a breve termine!")
         return
 
-    st.info(f"Addestramento PyTorch LSTM sui primi 6 numeri ordinati di ogni estrazione...")
+    st.info(f"Addestramento PyTorch LSTM focalizzato sulle dinamiche recenti (20 numeri base)...")
 
-    num_estrazioni = len(archivio)
-    binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
+    # PRENDIAMO SOLO LA CODA RECENTE DELL'ARCHIVIO (es. le ultime 15-20 estrazioni) per addestrare la rete sul breve termine
+    archivio_recente = archivio[-20:]
+    num_estrazioni = len(archivio_recente)
     
-    # MODIFICA CHIAVE: La rete si addestra SOLO sui primi 6 numeri in ordine crescente di ogni estrazione
-    for idx, ext in enumerate(archivio):
-        ext_ordinati = sorted(ext)
-        primi_6 = ext_ordinati[:6]
-        for n in primi_6:
+    binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
+    for idx, ext in enumerate(archivio_recente):
+        for n in ext:
             if 1 <= n <= 90:
                 binary_matrix[idx, n - 1] = 1.0
 
@@ -238,23 +237,22 @@ def elabora_previsione(quantita_numeri):
     X = torch.tensor(np.array(X_list), dtype=torch.float32)
     y = torch.tensor(np.array(y_list), dtype=torch.float32)
 
-    model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
+    model = LottoLSTM(input_dim=90, hidden_dim=64, num_layers=2)
     
     if os.path.exists(NOME_FILE_MODELLO):
         try:
             model.load_state_dict(torch.load(NOME_FILE_MODELLO))
-            epoche_training = 10
+            epoche_training = 15 # Fine-tuning rapido sulla coda recente
         except Exception:
             model.apply(init_weights)
-            epoche_training = 35
+            epoche_training = 40
     else:
         model.apply(init_weights)
-        epoche_training = 35
+        epoche_training = 40
 
-    # Pos weight ricalcolato per dati più sparsi (6 numeri su 90)
-    pos_weight_tensor = torch.tensor([8.0] * 90, dtype=torch.float32)
+    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
 
     model.train()
     for epoch in range(epoche_training):
@@ -268,14 +266,21 @@ def elabora_previsione(quantita_numeri):
 
     model.eval()
     with torch.no_grad():
-        ultimi_passi = binary_matrix[-lookback:]
+        # Per la previsione finale usiamo gli ultimi 'lookback' passi dell'archivio totale
+        binary_matrix_totale = np.zeros((len(archivio), 90), dtype=np.float32)
+        for idx, ext in enumerate(archivio):
+            for n in ext:
+                if 1 <= n <= 90:
+                    binary_matrix_totale[idx, n - 1] = 1.0
+                    
+        ultimi_passi = binary_matrix_totale[-lookback:]
         input_tensor = torch.tensor(ultimi_passi, dtype=torch.float32).unsqueeze(0)
         logits_pred = model(input_tensor)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    # Frequenze per Trigger
+    # Frequenze per Trigger sulle ultime 10 estrazioni
     frequenze_finestra = {n: 0 for n in range(1, 91)}
-    for ext in archivio[-lookback:]:
+    for ext in archivio[-10:]:
         for n in ext:
             if 1 <= n <= 90:
                 frequenze_finestra[n] += 1
@@ -286,8 +291,9 @@ def elabora_previsione(quantita_numeri):
         score_base = probs[i]
         freq = frequenze_finestra[num]
 
-        if freq <= 3:
-            score_corretto = score_base * 0.1
+        # Trigger frequenza breve termine
+        if freq == 0:
+            score_corretto = score_base * 0.2
         else:
             score_corretto = score_base
 
@@ -326,24 +332,24 @@ def elabora_previsione(quantita_numeri):
     salva_giocata(migliori)
 
     mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
-    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 2.0), 95.0), 1)
+    confidenza = round(min(float(mean_raw_score * 100 * 2.2), 95.0), 1)
 
-    st.markdown(f"### 🤖 PREVISIONE OTTIMIZZATA ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE BREVE TERMINE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.metric(label="🎯 Confidenza del Modello", value=f"{accuratezza_stimata} %")
+        st.metric(label="🎯 Confidenza del Modello", value=f"{confidenza} %")
     with col2:
         st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
 
     st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch (Training sui Primi 6)")
-st.write("Modello con memoria persistente addestrato esclusivamente sui primi 6 numeri in ordine crescente di ogni estrazione.")
+st.title("🤖 Bot 10eLotto - PyTorch (Training Breve Termine)")
+st.write("Modello reattivo addestrato sulle 20 estrazioni base recenti con lookback ridotto per catturare il momentum immediato.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
