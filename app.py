@@ -104,18 +104,21 @@ def scarica_estrazioni_con_bypass():
                 if match_num:
                     testo_sezione = match_num.group(1)
                     
-                    # CORRETTO: Estrae solo numeri validi da 1 a 2 cifre senza alterazioni o split errati
-                    pezzi_cifre = re.findall(r'\b([0-9]{1,2})\b', testo_sezione)
+                    # Estrae i blocchi numerici contigui presenti nel testo della sezione
+                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
                     
                     numeri_validi = []
                     visti = set()
                     
                     for p in pezzi_cifre:
-                        val = int(p)
-                        if 1 <= val <= 90 and val not in visti:
-                            visti.add(val)
-                            numeri_validi.append(val)
-                            
+                        # Taglia ogni blocco di cifre a coppie di 2 caratteri (es. 0105111516 -> 01, 05, 11, 15, 16)
+                        for j in range(0, len(p) - 1, 2):
+                            sub = int(p[j:j+2])
+                            if 1 <= sub <= 90 and sub not in visti:
+                                visti.add(sub)
+                                numeri_validi.append(sub)
+                            if len(numeri_validi) == 20:
+                                break
                         if len(numeri_validi) == 20:
                             break
                     
