@@ -11,7 +11,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch LSTM (Memoria Continua)",
+    page_title="Bot 10eLotto - PyTorch (Sistema 5 Decine)",
     page_icon="🤖",
     layout="centered"
 )
@@ -22,13 +22,14 @@ if not os.path.exists(CARTELLA_DOCUMENTI):
 
 NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
 NOME_FILE_MODELLO = os.path.join(CARTELLA_DOCUMENTI, "modello_lotto.pth")
+NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata.json")
 
 def carica_archivio():
     if os.path.exists(NOME_FILE_ARCHIVIO):
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if 20 <= len(ext) <= 35]
+                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
                 return archivio_ordinato
         except Exception as e:
             st.error(f"Errore nella lettura dell'archivio: {e}")
@@ -42,6 +43,22 @@ def salva_archivio(archivio):
     except Exception as e:
         st.error(f"Errore salvataggio archivio: {e}")
         return False
+
+def salva_giocata(sistema_decine):
+    try:
+        with open(NOME_FILE_ULTIMA_GIOCATA, "w", encoding="utf-8") as f:
+            json.dump(sistema_decine, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        pass
+
+def carica_giocata():
+    if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
+        try:
+            with open(NOME_FILE_ULTIMA_GIOCATA, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
 
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
@@ -83,56 +100,37 @@ def scarica_estrazioni_con_bypass():
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
-                # Base (20 numeri)
+                # Scraping numerico focalizzato SOLO sui 20 numeri BASE
                 match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
-                numeri_base = []
                 if match_num:
                     testo_sezione = match_num.group(1)
                     pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    
+                    numeri_validi = []
                     visti = set()
+                    
                     for p in pezzi_cifre:
                         if len(p) > 2 and len(p) % 2 == 0:
                             for j in range(0, len(p), 2):
                                 sub = int(p[j:j+2])
                                 if 1 <= sub <= 90 and sub not in visti:
                                     visti.add(sub)
-                                    numeri_base.append(sub)
+                                    numeri_validi.append(sub)
                         else:
                             val = int(p)
                             if 1 <= val <= 90 and val not in visti:
                                 visti.add(val)
-                                numeri_base.append(val)
-                        if len(numeri_base) == 20:
+                                numeri_validi.append(val)
+                                
+                        if len(numeri_validi) == 20:
                             break
-
-                # Extra (15 numeri)
-                numeri_extra = []
-                match_extra = re.search(r'Extra\s*([\s\S]*?)(?=#|$)', testo_blocco, re.IGNORECASE)
-                if match_extra:
-                    testo_extra = match_extra.group(1)
-                    pezzi_cifre_extra = re.findall(r'\d+', testo_extra)
-                    visti_extra = set()
-                    for p in pezzi_cifre_extra:
-                        if len(p) > 2 and len(p) % 2 == 0:
-                            for j in range(0, len(p), 2):
-                                sub = int(p[j:j+2])
-                                if 1 <= sub <= 90 and sub not in visti_extra:
-                                    visti_extra.add(sub)
-                                    numeri_extra.append(sub)
-                        else:
-                            val = int(p)
-                            if 1 <= val <= 90 and val not in visti_extra:
-                                visti_extra.add(val)
-                                numeri_extra.append(val)
-                        if len(numeri_extra) == 15:
-                            break
-
-                if len(numeri_base) == 20:
-                    tutti_numeri = sorted(list(set(numeri_base + numeri_extra)))
-                    estrazioni_trovate.append({
-                        'id': id_concorso,
-                        'numeri': tutti_numeri
-                    })
+                    
+                    if len(numeri_validi) == 20:
+                        numeri_validi.sort()
+                        estrazioni_trovate.append({
+                            'id': id_concorso,
+                            'numeri': numeri_validi
+                        })
 
             if not estrazioni_trovate:
                 return []
@@ -185,9 +183,39 @@ def init_weights(m):
             m.bias.data.fill_(0)
 
 # ==========================================
-# ELABORAZIONE CON APPRENDIMENTO INCREMENTALE
+# GESTIONE VERIFICA ULTIMA GIOCATA
 # ==========================================
-def elabora_previsione(quantita_numeri):
+def verifica_esito_ultima_giocata(ultima_estrazione):
+    ultima_giocata = carica_giocata()
+    if not ultima_giocata:
+        return
+
+    st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
+    set_estratto = set(ultima_estrazione)
+    
+    vincite_trovate = False
+     res_html = ""
+
+    for idx, decina in enumerate(ultima_giocata):
+        presi = set(decina).intersection(set_estratto)
+        punti = len(presi)
+        
+        if punti >= 5:
+            vincite_trovate = True
+            st.success(f"🎉 **DECINA {idx+1}: VINCENTE! {punti} PUNTI REALIZZATI!** (Numeri indovinati: {sorted(list(presi))})")
+        else:
+            st.write(f"• Decina {idx+1}: {punti} punti su 10 (Indovinati: {sorted(list(presi)) if punti > 0 else 'Nessuno'})")
+
+    if vincite_trovate:
+        st.balloons()
+    else:
+        st.info("ℹ️ Nessuna decina ha raggiunto la soglia minima di vincita (5 punti). Il modello ha registrato l'errore per correggere la mira.")
+    st.markdown("---")
+
+# ==========================================
+# ELABORAZIONE PREVISIONE CON SISTEMA 5 DECINE
+# ==========================================
+def elabora_previsione():
     archivio = carica_archivio()
     lookback = 40  
     
@@ -195,7 +223,7 @@ def elabora_previsione(quantita_numeri):
         st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback} estrazioni!")
         return
 
-    st.info(f"Aggiornamento della rete con memoria continua (Fine-Tuning)...")
+    st.info(f"Addestramento PyTorch LSTM solo su Base + Generazione Sistema 5 Decine...")
 
     num_estrazioni = len(archivio)
     binary_matrix = np.zeros((num_estrazioni, 90), dtype=np.float32)
@@ -212,25 +240,22 @@ def elabora_previsione(quantita_numeri):
     X = torch.tensor(np.array(X_list), dtype=torch.float32)
     y = torch.tensor(np.array(y_list), dtype=torch.float32)
 
-    # Inizializzazione o Caricamento della Memoria Esistente
     model = LottoLSTM(input_dim=90, hidden_dim=128, num_layers=2)
     
     if os.path.exists(NOME_FILE_MODELLO):
         try:
             model.load_state_dict(torch.load(NOME_FILE_MODELLO))
-            st.toast("🧠 Memoria precedente caricata con successo! Correggo la mira sull'ultimo errore.", icon="🔄")
-            epoche_training = 10 # Poche epoche di adattamento rapido (Fine-Tuning)
-        except Exception as e:
-            st.warning("Impossibile caricare il vecchio modello. Avvio nuovo training da zero.")
+            epoche_training = 10
+        except Exception:
             model.apply(init_weights)
             epoche_training = 35
     else:
         model.apply(init_weights)
         epoche_training = 35
 
-    pos_weight_tensor = torch.tensor([1.6] * 90, dtype=torch.float32)
+    pos_weight_tensor = torch.tensor([3.5] * 90, dtype=torch.float32)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4) # Learning rate più basso per non stravolgere la memoria
+    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-4)
 
     model.train()
     for epoch in range(epoche_training):
@@ -240,7 +265,6 @@ def elabora_previsione(quantita_numeri):
         loss.backward()
         optimizer.step()
 
-    # SALVATAGGIO DEI PESI AGGIORNATI PER LA PROSSIMA VOLTA
     torch.save(model.state_dict(), NOME_FILE_MODELLO)
 
     model.eval()
@@ -271,14 +295,13 @@ def elabora_previsione(quantita_numeri):
         valutazioni.append({
             'numero': num,
             'score': score_corretto,
-            'score_raw': score_base,
-            'freq': freq
+            'score_raw': score_base
         })
 
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
-    # Trigger Anti-Clustering (Decine)
-    max_per_decina = 1 if quantita_numeri <= 4 else 2
+    # Trigger Anti-Clustering (Decine max 3 numeri sui 20 totali)
+    max_per_decina = 3
     conteggio_decine = {d: 0 for d in range(10)}
     valutazioni_filtrate = []
 
@@ -297,60 +320,49 @@ def elabora_previsione(quantita_numeri):
 
     valutazioni_filtrate.sort(key=lambda x: x['score'], reverse=True)
 
-    selezionati = valutazioni_filtrate[:quantita_numeri]
-    migliori = [item['numero'] for item in selezionati]
-    migliori.sort()
+    # Selezioniamo i TOP 20 NUMERI scelti dall'IA
+    top_20 = [item['numero'] for item in valutazioni_filtrate[:20]]
 
-    mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
-    accuratezza_stimata = round(min(float(mean_raw_score * 100 * 1.6), 91.0), 1)
+    # ==========================================
+    # SVILUPPO SISTEMA RIDOTTO (PROPOSTA 1: 5 DECINE)
+    # ==========================================
+    N = top_20
+    d1 = sorted([N[0], N[1], N[2], N[3], N[4], N[5], N[6], N[7], N[8], N[9]])
+    d2 = sorted([N[10], N[11], N[12], N[13], N[14], N[15], N[16], N[17], N[18], N[19]])
+    d3 = sorted([N[0], N[1], N[2], N[3], N[4], N[10], N[11], N[12], N[13], N[14]])
+    d4 = sorted([N[5], N[6], N[7], N[8], N[9], N[15], N[16], N[17], N[18], N[19]])
+    d5 = sorted([N[0], N[2], N[4], N[6], N[8], N[10], N[12], N[14], N[16], N[18]])
 
-    if accuratezza_stimata >= 75.0:
-        colpi_consigliati = 1
-        tipo_giocata = "🔥 A COLPO SECCO (1 sola estrazione)"
-    elif accuratezza_stimata >= 60.0:
-        colpi_consigliati = 2
-        tipo_giocata = "⚡ BREVE CICLO (2 colpi massimo)"
-    else:
-        colpi_consigliati = 4
-        tipo_giocata = "🛡️ CICLO STANDARD (Fino a 4 colpi)"
+    sistema_5_decine = [d1, d2, d3, d4, d5]
+    salva_giocata(sistema_5_decine)
 
-    st.success("Previsione con Memoria Continua completata!")
+    st.markdown("### 🎯 NUOVO SISTEMA RIDOTTO (5 DECINE PROPOSTA 1):")
+    st.write("I 20 migliori numeri selezionati da PyTorch sono stati sviluppati nelle seguenti 5 schedine:")
 
-    st.markdown(f"### 🤖 PREVISIONE MEMORIA CONTINUA ({quantita_numeri} NUMERI):")
-    numeri_str = " - ".join(map(str, migliori))
-    st.markdown(f"## **` {numeri_str} `**")
+    for idx, dec in enumerate(sistema_5_decine):
+        dec_str = " - ".join(f"{n:02d}" for n in dec)
+        st.markdown(f"**Decina #{idx+1}:** ` {dec_str} `")
 
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="🎯 Accuratezza Stimata Bot", value=f"{accuratezza_stimata} %")
-    with col2:
-        st.metric(label="⏳ Colpi Consigliati", value=f"{colpi_consigliati} Colpo/i")
-
-    st.info(f"📌 **Consiglio Operativo Bot:** Gioca questa previsione **{tipo_giocata}** con l'opzione **EXTRA ATTIVA**.")
-
-    st.balloons()
+    st.info("📌 **Nota Operativa:** Gioca queste 5 decine aggiungendo l'opzione **EXTRA ATTIVA** per massimizzare le probabilità di vincita.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch (Memoria Continua)")
-st.write("Modello con persistenza dei pesi: la rete conserva l'esperienza accumulata e corregge la mira passo dopo passo.")
+st.title("🤖 Bot 10eLotto - PyTorch (Sistema 5 Decine)")
+st.write("Addestramento basato unicamente sull'archivio BASE con sviluppo automatico in sistema ridotto a 5 decine.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
 
 opzione = st.sidebar.radio(
     "Scegli un'azione:",
-    ("Genera Previsione", "Scarica Web & Prendi Previsione", "Visualizza Archivio", "Svuota Archivio")
+    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
 )
 
-if opzione == "Scarica Web & Prendi Previsione":
-    if st.button("Avvia Sincronizzazione Web", type="primary"):
-        with st.spinner("Scraping e aggiornamento memoria in corso..."):
+if opzione == "Scarica Web, Verifica & Previsione":
+    if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
+        with st.spinner("Scraping e verifica esito precedente..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -363,31 +375,36 @@ if opzione == "Scarica Web & Prendi Previsione":
                         set_esistenti.add(chiave)
                         nuove_aggiunte += 1
                 
-                if salva_archivio(archivio):
-                    st.success(f"Sincronizzazione completata! Aggiunte {nuove_aggiunte} estrazioni.")
-                    elabora_previsione(quantita)
-                else:
-                    st.error("Errore salvataggio file.")
+                salva_archivio(archivio)
+                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
+                
+                # 1. Verifica immediata dell'esito della giocata precedente
+                verifica_esito_ultima_giocata(archivio[-1])
+                
+                # 2. Generazione della nuova previsione
+                elabora_previsione()
             else:
-                st.error("Nessuna estrazione trovata.")
+                st.error("Nessuna estrazione trovata sul web.")
 
-elif opzione == "Genera Previsione":
-    if st.button("Genera Previsione da Archivio", type="primary"):
-        with st.spinner("Elaborazione con pesi persistenti..."):
-            elabora_previsione(quantita)
+elif opzione == "Genera Solamente Previsione":
+    if st.button("Genera Previsione da Archivio Locale", type="primary"):
+        with st.spinner("Elaborazione sistema in corso..."):
+            elabora_previsione()
 
 elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni")
+    st.subheader("📁 Storico Estrazioni (Solo Base)")
     archivio = carica_archivio()
     if len(archivio) == 0:
         st.info("Archivio vuoto.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
-            st.text(f"#{len(archivio)-idx} ({len(ext)} numeri): {', '.join(map(str, ext))}")
+            st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
 
 elif opzione == "Svuota Archivio":
-    if st.button("Conferma Cancellazione Archivio e Modello", type="secondary"):
+    if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
         salva_archivio([])
         if os.path.exists(NOME_FILE_MODELLO):
             os.remove(NOME_FILE_MODELLO)
-        st.success("Archivio e memoria del modello azzerati con successo.")
+        if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
+            os.remove(NOME_FILE_ULTIMA_GIOCATA)
+        st.success("Archivio, modello e ultime giocate cancellate con successo.")
