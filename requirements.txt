@@ -2,3 +2,5 @@ torch
 numpy
 streamlit
 cloudscraper
+beautifulsoup4
+requests
