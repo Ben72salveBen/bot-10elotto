@@ -100,7 +100,6 @@ def scarica_estrazioni_con_bypass():
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
-                # Scraping numerico focalizzato SOLO sui 20 numeri BASE
                 match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
                 if match_num:
                     testo_sezione = match_num.group(1)
@@ -194,7 +193,6 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     set_estratto = set(ultima_estrazione)
     
     vincite_trovate = False
-     res_html = ""
 
     for idx, decina in enumerate(ultima_giocata):
         presi = set(decina).intersection(set_estratto)
