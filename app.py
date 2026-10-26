@@ -103,24 +103,19 @@ def scarica_estrazioni_con_bypass():
                 match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
                 if match_num:
                     testo_sezione = match_num.group(1)
-                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    
+                    # CORRETTO: Estrae solo numeri validi da 1 a 2 cifre senza alterazioni o split errati
+                    pezzi_cifre = re.findall(r'\b([0-9]{1,2})\b', testo_sezione)
                     
                     numeri_validi = []
                     visti = set()
                     
                     for p in pezzi_cifre:
-                        if len(p) > 2 and len(p) % 2 == 0:
-                            for j in range(0, len(p), 2):
-                                sub = int(p[j:j+2])
-                                if 1 <= sub <= 90 and sub not in visti:
-                                    visti.add(sub)
-                                    numeri_validi.append(sub)
-                        else:
-                            val = int(p)
-                            if 1 <= val <= 90 and val not in visti:
-                                visti.add(val)
-                                numeri_validi.append(val)
-                                
+                        val = int(p)
+                        if 1 <= val <= 90 and val not in visti:
+                            visti.add(val)
+                            numeri_validi.append(val)
+                            
                         if len(numeri_validi) == 20:
                             break
                     
@@ -207,19 +202,18 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Training sulle ultime estrazioni)
+# ELABORAZIONE PREVISIONE
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
-    lookback = 4  # Finestra ridotta a 4 concorsi per un'analisi ultra-fresca
+    lookback = 4  
     
     if len(archivio) < (lookback + 5):
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 5} estrazioni per l'analisi a breve termine!")
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno {lookback + 5} estrazioni per l'analisi.")
         return
 
     st.info(f"Addestramento PyTorch LSTM focalizzato sulle dinamiche recenti (20 numeri base)...")
 
-    # PRENDIAMO SOLO LA CODA RECENTE DELL'ARCHIVIO (es. le ultime 15-20 estrazioni) per addestrare la rete sul breve termine
     archivio_recente = archivio[-20:]
     num_estrazioni = len(archivio_recente)
     
@@ -242,7 +236,7 @@ def elabora_previsione(quantita_numeri):
     if os.path.exists(NOME_FILE_MODELLO):
         try:
             model.load_state_dict(torch.load(NOME_FILE_MODELLO))
-            epoche_training = 15 # Fine-tuning rapido sulla coda recente
+            epoche_training = 15 
         except Exception:
             model.apply(init_weights)
             epoche_training = 40
@@ -266,7 +260,6 @@ def elabora_previsione(quantita_numeri):
 
     model.eval()
     with torch.no_grad():
-        # Per la previsione finale usiamo gli ultimi 'lookback' passi dell'archivio totale
         binary_matrix_totale = np.zeros((len(archivio), 90), dtype=np.float32)
         for idx, ext in enumerate(archivio):
             for n in ext:
@@ -278,7 +271,6 @@ def elabora_previsione(quantita_numeri):
         logits_pred = model(input_tensor)
         probs = torch.sigmoid(logits_pred).squeeze(0).numpy()
 
-    # Frequenze per Trigger sulle ultime 10 estrazioni
     frequenze_finestra = {n: 0 for n in range(1, 91)}
     for ext in archivio[-10:]:
         for n in ext:
@@ -291,7 +283,6 @@ def elabora_previsione(quantita_numeri):
         score_base = probs[i]
         freq = frequenze_finestra[num]
 
-        # Trigger frequenza breve termine
         if freq == 0:
             score_corretto = score_base * 0.2
         else:
@@ -305,7 +296,6 @@ def elabora_previsione(quantita_numeri):
 
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
-    # Trigger Anti-Clustering (Decine)
     max_per_decina = 1 if quantita_numeri <= 4 else 2
     conteggio_decine = {d: 0 for d in range(10)}
     valutazioni_filtrate = []
@@ -334,7 +324,7 @@ def elabora_previsione(quantita_numeri):
     mean_raw_score = np.mean([item['score_raw'] for item in selezionati])
     confidenza = round(min(float(mean_raw_score * 100 * 2.2), 95.0), 1)
 
-    st.markdown(f"### 🤖 PREVISIONE BREVE TERMINE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
@@ -349,7 +339,7 @@ def elabora_previsione(quantita_numeri):
 
 # Interfaccia Grafica Streamlit
 st.title("🤖 Bot 10eLotto - PyTorch (Training Breve Termine)")
-st.write("Modello reattivo addestrato sulle 20 estrazioni base recenti con lookback ridotto per catturare il momentum immediato.")
+st.write("Modello reattivo addestrato sulle estrazioni base recenti con lookback ridotto.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -382,10 +372,7 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                # 1. Verifica immediata dell'esito precedente
                 verifica_esito_ultima_giocata(archivio[-1])
-                
-                # 2. Generazione nuova previsione
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
