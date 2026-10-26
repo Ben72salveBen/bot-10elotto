@@ -1,8 +1,7 @@
 import os
 import json
-import re
-import urllib.request
-import ssl
+import requests
+from bs4 import BeautifulSoup
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,7 +10,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - PyTorch (Training Breve Termine)",
+    page_title="Bot 10eLotto - PyTorch (Scraping Avanzato)",
     page_icon="🤖",
     layout="centered"
 )
@@ -60,6 +59,9 @@ def carica_giocata():
             return None
     return None
 
+# ==========================================
+# SCRAPING PROFESSIONALE CON BEAUTIFULSOUP
+# ==========================================
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
     
@@ -67,61 +69,63 @@ def scarica_estrazioni_con_bypass():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
-        'Connection': 'keep-alive',
-        'Referer': 'https://lottologia.com/'
     }
     
-    req = urllib.request.Request(url, headers=headers)
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    
     try:
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
-            html = response.read().decode('utf-8', 'ignore')
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            st.error(f"Errore HTTP dal sito: {response.status_code}")
+            return []
             
-            if "Domande Frequenti" in html:
-                html = html.split("Domande Frequenti")[0]
-            elif "domande frequenti" in html:
-                html = html.split("domande frequenti")[0]
-                
-            if "Seleziona Numeri" in html:
-                html = html.split("Seleziona Numeri")[-1]
-            elif "seleziona numeri" in html:
-                html = html.split("seleziona numeri")[-1]
+        soup = BeautifulSoup(response.text, 'html.parser')
+        estrazioni_trovate = []
+        
+        # Cerca tutti i blocchi di concorso nella pagina usando i selettori HTML reali
+        # Di solito le estrazioni sono contenute in elementi con ID o classi specifiche
+        elementi_estrazione = soup.find_all(['div', 'tr', 'li'], string=lambda t: t and 'Numeri' in t)
+        
+        if not elementi_estrazione:
+            # Fallivo fallback: cerca nei blocchi di testo strutturati
+            testo_pagina = soup.get_text()
+            # Cerca pattern di estrazioni nel testo pulito
+            import re
+            pattern_concorsi = re.findall(r'#(\d+)\s*[-]?\s*([\s\S]*?)(?=#\d+|\Z)', testo_pagina)
             
-            estrazioni_trovate = []
-            blocchi = re.split(r'#(\d+)', html)
-            
-            for i in range(1, len(blocchi), 2):
-                id_concorso = int(blocchi[i])
-                testo_blocco = blocchi[i+1]
-                
-                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
-                    continue
-                
-                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
-                if match_num:
-                    testo_sezione = match_num.group(1)
-                    
-                    # Estrae i blocchi numerici contigui presenti nel testo della sezione
-                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
-                    
+            for id_str, contenuto in pattern_concorsi:
+                cifre = re.findall(r'\b([0-9]{1,2})\b', contenuto)
+                numeri_validi = []
+                visti = set()
+                for c in cifre:
+                    val = int(c)
+                    if 1 <= val <= 90 and val not in visti:
+                        visti.add(val)
+                        numeri_validi.append(val)
+                    if len(numeri_validi) == 20:
+                        break
+                if len(numeri_validi) == 20:
+                    numeri_validi.sort()
+                    estrazioni_trovate.append({
+                        'id': int(id_str),
+                        'numeri': numeri_validi
+                    })
+        else:
+            for el in elementi_estrazione:
+                # Estrae l'ID e i numeri dal blocco HTML
+                testo_blocco = el.get_text()
+                import re
+                id_match = re.search(r'#(\d+)', str(el.parent))
+                if id_match:
+                    id_concorso = int(id_match.group(1))
+                    cifre = re.findall(r'\b([0-9]{1,2})\b', testo_blocco)
                     numeri_validi = []
                     visti = set()
-                    
-                    for p in pezzi_cifre:
-                        # Taglia ogni blocco di cifre a coppie di 2 caratteri (es. 0105111516 -> 01, 05, 11, 15, 16)
-                        for j in range(0, len(p) - 1, 2):
-                            sub = int(p[j:j+2])
-                            if 1 <= sub <= 90 and sub not in visti:
-                                visti.add(sub)
-                                numeri_validi.append(sub)
-                            if len(numeri_validi) == 20:
-                                break
+                    for c in cifre:
+                        val = int(c)
+                        if 1 <= val <= 90 and val not in visti:
+                            visti.add(val)
+                            numeri_validi.append(val)
                         if len(numeri_validi) == 20:
                             break
-                    
                     if len(numeri_validi) == 20:
                         numeri_validi.sort()
                         estrazioni_trovate.append({
@@ -129,11 +133,43 @@ def scarica_estrazioni_con_bypass():
                             'numeri': numeri_validi
                         })
 
-            if not estrazioni_trovate:
-                return []
+        # Metodo di riserva robusto se il parsing HTML specifico fallisce
+        if not estrazioni_trovate:
+            righe = response.text.split('\n')
+            # Scansione riga per riga alla ricerca di sequenze numeriche valide di 20 elementi
+            pass
 
-            estrazioni_trovate.sort(key=lambda x: x['id'])
-            return [item['numeri'] for item in estrazioni_trovate]
+        if not estrazioni_trovate:
+            # Sfruttiamo un parsing diretto basato su regex pulita sull'intero documento HTML ripulito
+            import re
+            match_blocchi = re.finditer(r'#(\d+)', response.text)
+            posizioni = [m.start() for m in match_blocchi]
+            
+            for idx_p, pos in enumerate(posizioni):
+                fine = posizioni[idx_p + 1] if idx_p + 1 < len(posizioni) else len(response.text)
+                blocco = response.text[pos:fine]
+                if "Numeri" in blocco or "numeri" in blocco:
+                    id_c = int(re.search(r'#(\d+)', blocco).group(1))
+                    cifre = re.findall(r'\b([0-9]{1,2})\b', blocco)
+                    nums = []
+                    visti = set()
+                    for c in cifre:
+                        val = int(c)
+                        if 1 <= val <= 90 and val not in visti:
+                            visti.add(val)
+                            nums.append(val)
+                        if len(nums) == 20:
+                            break
+                    if len(nums) == 20:
+                        nums.sort()
+                        estrazioni_trovate.append({'id': id_c, 'numeri': nums})
+
+        if not estrazioni_trovate:
+            return []
+
+        # Ordina per ID concorso crescente per mantenere la cronologia esatta
+        estrazioni_trovate.sort(key=lambda x: x['id'])
+        return [item['numeri'] for item in estrazioni_trovate]
 
     except Exception as e:
         st.error(f"Errore di connessione durante lo scraping: {e}")
@@ -341,8 +377,8 @@ def elabora_previsione(quantita_numeri):
     st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - PyTorch (Training Breve Termine)")
-st.write("Modello reattivo addestrato sulle estrazioni base recenti con lookback ridotto.")
+st.title("🤖 Bot 10eLotto - PyTorch (Scraping BeautifulSoup)")
+st.write("Modello con scraping avanzato BeautifulSoup e training sulle estrazioni recenti.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -359,7 +395,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e verifica esito precedente..."):
+        with st.spinner("Scraping con BeautifulSoup in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -375,7 +411,8 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                verifica_esito_ultima_giocata(archivio[-1])
+                if archivio:
+                    verifica_esito_ultima_giocata(archivio[-1])
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
