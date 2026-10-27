@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Catene di Markov",
+    page_title="Bot 10eLotto - Markov Avanzato (2° Ordine + Decay)",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,49 +163,70 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Catene di Markov)
+# ELABORAZIONE PREVISIONE (Markov 2° Ordine + Decay)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 10:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 10 estrazioni per le Catene di Markov!")
+    if len(archivio) < 15:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 15 estrazioni per Markov avanzato!")
         return
 
-    st.info("Calcolo delle probabilità di transizione tramite Catene di Markov...")
+    st.info("Calcolo avanzato: Catene di Markov (2° Ordine + Ponderazione Temporale Esponenziale)...")
 
-    # Utilizziamo una finestra recente (ultime 30 estrazioni) per la matrice di transizione
-    archivio_recente = archivio[-30:] if len(archivio) >= 30 else archivio
+    # Finestra recente di analisi (ultime 40 estrazioni)
+    archivio_recente = archivio[-40:] if len(archivio) >= 40 else archivio
+    n_rec = len(archivio_recente)
 
-    # Matrice di transizione 90x90
-    # transizioni[i][j] = quante volte il numero j è uscito al tempo t+1 dato i al tempo t
-    transizioni = np.zeros((90, 90), dtype=np.float32)
+    # Matrici di transizione 90x90 per 1° Ordine (T -> T+1) e 2° Ordine (T-1 -> T+1)
+    transizioni_1 = np.zeros((90, 90), dtype=np.float32)
+    transizioni_2 = np.zeros((90, 90), dtype=np.float32)
 
-    for k in range(len(archivio_recente) - 1):
-        estrazione_corrente = archivio_recente[k]
-        estrazione_successiva = archivio_recente[k+1]
+    for k in range(2, n_rec):
+        # Fattore di decadimento temporale esponenziale (i concorsi più vicini pesano di più)
+        peso_temporale = np.exp((k - n_rec) / 10.0)
         
-        for i in estrazione_corrente:
+        ext_t_minus_1 = archivio_recente[k-2]
+        ext_t = archivio_recente[k-1]
+        ext_next = archivio_recente[k]
+        
+        # 1° Ordine (da T a T+1)
+        for i in ext_t:
             if 1 <= i <= 90:
-                for j in estrazione_successiva:
+                for j in ext_next:
                     if 1 <= j <= 90:
-                        transizioni[i-1][j-1] += 1.0
+                        transizioni_1[i-1][j-1] += peso_temporale
+                        
+        # 2° Ordine (da T-1 a T+1)
+        for i in ext_t_minus_1:
+            if 1 <= i <= 90:
+                for j in ext_next:
+                    if 1 <= j <= 90:
+                        transizioni_2[i-1][j-1] += (peso_temporale * 0.5)
 
-    # Smoothing di Laplace per evitare divisioni per zero
-    transizioni += 1.0
+    # Smoothing di Laplace
+    transizioni_1 += 1.0
+    transizioni_2 += 1.0
 
-    # Normalizzazione per riga (probabilità condizionata P(j | i))
-    somme_righe = transizioni.sum(axis=1, keepdims=True)
-    matrice_prob = transizioni / somme_righe
+    # Normalizzazione per riga (probabilità condizionata)
+    matrice_prob_1 = transizioni_1 / transizioni_1.sum(axis=1, keepdims=True)
+    matrice_prob_2 = transizioni_2 / transizioni_2.sum(axis=1, keepdims=True)
 
-    # Stato di partenza: l'ultima estrazione registrata nell'archivio
+    # Stati di partenza: ultima estrazione (T) e penultima (T-1)
     ultima_estrazione = archivio[-1]
+    penultima_estrazione = archivio[-2] if len(archivio) >= 2 else ultima_estrazione
 
-    # Somma delle probabilità di transizione da tutti i numeri dell'ultima estrazione
     scores_raw = np.zeros(90, dtype=np.float32)
+    
+    # Contributo 1° Ordine da T (peso 70%)
     for i in ultima_estrazione:
         if 1 <= i <= 90:
-            scores_raw += matrice_prob[i-1]
+            scores_raw += 0.7 * matrice_prob_1[i-1]
+            
+    # Contributo 2° Ordine da T-1 (peso 30%)
+    for i in penultima_estrazione:
+        if 1 <= i <= 90:
+            scores_raw += 0.3 * matrice_prob_2[i-1]
 
     # Frequenze calcolate esclusivamente sulle ULTIME 5 ESTRAZIONI più recenti
     frequenze_finestra = {n: 0 for n in range(1, 91)}
@@ -261,9 +282,9 @@ def elabora_previsione(quantita_numeri):
     salva_giocata(migliori)
 
     mean_raw_score = np.mean([item['score_raw'] for item in selezionati]) if selezionati else 0
-    confidenza = round(min(float(mean_raw_score * 100 * 4.0), 95.0), 1)
+    confidenza = round(min(float(mean_raw_score * 100 * 5.0), 95.0), 1)
 
-    st.markdown(f"### 🤖 PREVISIONE MARKOV ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE MARKOV AVANZATA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
@@ -277,8 +298,8 @@ def elabora_previsione(quantita_numeri):
     st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Catene di Markov")
-st.write("Modello stocastico basato su matrici di transizione di Markov e frequenze recenti.")
+st.title("🤖 Bot 10eLotto - Markov Avanzato")
+st.write("Modello stocastico con Catene di Markov di 2° ordine e decadimento temporale esponenziale.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -295,7 +316,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e calcolo di Markov in corso..."):
+        with st.spinner("Scraping e calcolo Markov avanzato in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
