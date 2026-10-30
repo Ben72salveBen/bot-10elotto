@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Markov Avanzato (2° Ordine + Decay)",
+    page_title="Bot 10eLotto - Markov Ultra-Chirurgico (PMI + Momentum)",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,89 +163,130 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Markov 2° Ordine + Decay)
+# ELABORAZIONE PREVISIONE (Markov + PMI + Accelerazione)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 15:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 15 estrazioni per Markov avanzato!")
+    if len(archivio) < 25:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 25 estrazioni per l'analisi ultra-chirurgica!")
         return
 
-    st.info("Calcolo avanzato: Catene di Markov (2° Ordine + Ponderazione Temporale Esponenziale)...")
+    st.info("Elaborazione avanzata con Catene di Markov, PMI e Accelerazione del Momentum...")
 
-    # Finestra recente di analisi (ultime 40 estrazioni)
-    archivio_recente = archivio[-40:] if len(archivio) >= 40 else archivio
+    archivio_recente = archivio[-50:] if len(archivio) >= 50 else archivio
     n_rec = len(archivio_recente)
 
-    # Matrici di transizione 90x90 per 1° Ordine (T -> T+1) e 2° Ordine (T-1 -> T+1)
+    # 1. Matrici di Transizione Markov (1° e 2° Ordine con Decay)
     transizioni_1 = np.zeros((90, 90), dtype=np.float32)
     transizioni_2 = np.zeros((90, 90), dtype=np.float32)
+    
+    # 2. Strutture per PMI (Co-occorrenze e frequenze singole)
+    conteggi_singoli = np.zeros(90, dtype=np.float32)
+    cooccorrenze_grezze = np.zeros((90, 90), dtype=np.float32)
+    totale_estrazioni_pmi = float(n_rec)
 
     for k in range(2, n_rec):
-        # Fattore di decadimento temporale esponenziale (i concorsi più vicini pesano di più)
-        peso_temporale = np.exp((k - n_rec) / 10.0)
+        peso_temporale = np.exp((k - n_rec) / 12.0)
         
         ext_t_minus_1 = archivio_recente[k-2]
         ext_t = archivio_recente[k-1]
         ext_next = archivio_recente[k]
         
-        # 1° Ordine (da T a T+1)
+        # Markov 1° Ordine
         for i in ext_t:
             if 1 <= i <= 90:
                 for j in ext_next:
                     if 1 <= j <= 90:
                         transizioni_1[i-1][j-1] += peso_temporale
                         
-        # 2° Ordine (da T-1 a T+1)
+        # Markov 2° Ordine
         for i in ext_t_minus_1:
             if 1 <= i <= 90:
                 for j in ext_next:
                     if 1 <= j <= 90:
                         transizioni_2[i-1][j-1] += (peso_temporale * 0.5)
 
-    # Smoothing di Laplace
+        # Raccolta dati per PMI
+        for n in ext_next:
+            if 1 <= n <= 90:
+                conteggi_singoli[n-1] += 1.0
+        for i in range(len(ext_next)):
+            for j in range(i + 1, len(ext_next)):
+                n1, n2 = ext_next[i], ext_next[j]
+                if 1 <= n1 <= 90 and 1 <= n2 <= 90:
+                    cooccorrenze_grezze[n1-1][n2-1] += 1.0
+                    cooccorrenze_grezze[n2-1][n1-1] += 1.0
+
+    # Calcolo della PMI (Pointwise Mutual Information)
+    matrice_pmi = np.zeros((90, 90), dtype=np.float32)
+    for i in range(90):
+        for j in range(90):
+            if i != j and cooccorrenze_grezze[i][j] > 0:
+                p_xy = cooccorrenze_grezze[i][j] / totale_estrazioni_pmi
+                p_x = conteggi_singoli[i] / totale_estrazioni_pmi
+                p_y = conteggi_singoli[j] / totale_estrazioni_pmi
+                if p_x > 0 and p_y > 0:
+                    matrice_pmi[i][j] = np.log(p_xy / (p_x * p_y))
+
+    # Smoothing e normalizzazione Markov
     transizioni_1 += 1.0
     transizioni_2 += 1.0
-
-    # Normalizzazione per riga (probabilità condizionata)
     matrice_prob_1 = transizioni_1 / transizioni_1.sum(axis=1, keepdims=True)
     matrice_prob_2 = transizioni_2 / transizioni_2.sum(axis=1, keepdims=True)
 
-    # Stati di partenza: ultima estrazione (T) e penultima (T-1)
     ultima_estrazione = archivio[-1]
     penultima_estrazione = archivio[-2] if len(archivio) >= 2 else ultima_estrazione
 
     scores_raw = np.zeros(90, dtype=np.float32)
-    
-    # Contributo 1° Ordine da T (peso 70%)
     for i in ultima_estrazione:
         if 1 <= i <= 90:
             scores_raw += 0.7 * matrice_prob_1[i-1]
             
-    # Contributo 2° Ordine da T-1 (peso 30%)
     for i in penultima_estrazione:
         if 1 <= i <= 90:
             scores_raw += 0.3 * matrice_prob_2[i-1]
 
-    # Frequenze calcolate esclusivamente sulle ULTIME 5 ESTRAZIONI più recenti
-    frequenze_finestra = {n: 0 for n in range(1, 91)}
-    for ext in archivio[-5:]:
+    # 3. Calcolo del Ritardo Esatto
+    ritardi = {n: 999 for n in range(1, 91)}
+    for idx_rev, ext in enumerate(reversed(archivio)):
+        for n in ext:
+            if 1 <= n <= 90 and ritardi[n] == 999:
+                ritardi[n] = idx_rev
+
+    # 4. Accelerazione del Momentum (Frequenza ultimi 2 concorsi vs precedenti 8)
+    freq_ultimi_2 = {n: 0 for n in range(1, 91)}
+    for ext in archivio[-2:]:
         for n in ext:
             if 1 <= n <= 90:
-                frequenze_finestra[n] += 1
+                freq_ultimi_2[n] += 1
+
+    freq_precedenti_8 = {n: 0 for n in range(1, 91)}
+    for ext in archivio[-10:-2]:
+        for n in ext:
+            if 1 <= n <= 90:
+                freq_precedenti_8[n] += 1
 
     valutazioni = []
     for i in range(90):
         num = i + 1
         score_base = scores_raw[i]
-        freq = frequenze_finestra[num]
+        ritardo = ritardi[num]
+        
+        # Accelerazione: rapporto tra la spinta recente e la media passata
+        momentum_acc = (freq_ultimi_2[num] * 2.0) - freq_precedenti_8[num]
 
-        # Penalizzazione numeri freddi nelle ultime 5 estrazioni
-        if freq == 0:
-            score_corretto = score_base * 0.1
+        # Filtro Ritardo e Boost Momentum
+        if ritardo > 15:  # Troppo in ritardo, penalizzazione prudenziale
+            score_corretto = score_base * 0.5
+        elif 2 <= ritardo <= 10:  # Finestra di ritardo ottimale
+            score_corretto = score_base * 1.2
         else:
             score_corretto = score_base
+
+        # Se c'è un'accelerazione di momentum positiva, potenziamo lo score
+        if momentum_acc > 0:
+            score_corretto *= (1.0 + (momentum_acc * 0.3))
 
         valutazioni.append({
             'numero': num,
@@ -255,7 +296,22 @@ def elabora_previsione(quantita_numeri):
 
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
-    # Trigger Anti-Clustering (Decine)
+    # 5. Sinergia basata su PMI tra i top candidati
+    top_candidati = [item['numero'] for item in valutazioni[:25]]
+    bonus_pmi = np.zeros(90, dtype=np.float32)
+    for c1 in top_candidati:
+        for c2 in top_candidati:
+            if c1 != c2:
+                pmi_val = matrice_pmi[c1-1][c2-1]
+                if pmi_val > 0:
+                    bonus_pmi[c1-1] += pmi_val * 0.05
+
+    for item in valutazioni:
+        item['score'] += bonus_pmi[item['numero']-1]
+
+    valutazioni.sort(key=lambda x: x['score'], reverse=True)
+
+    # 6. Filtro Anti-Clustering (Decine)
     max_per_decina = 1 if quantita_numeri <= 4 else 2
     conteggio_decine = {d: 0 for d in range(10)}
     valutazioni_filtrate = []
@@ -282,9 +338,9 @@ def elabora_previsione(quantita_numeri):
     salva_giocata(migliori)
 
     mean_raw_score = np.mean([item['score_raw'] for item in selezionati]) if selezionati else 0
-    confidenza = round(min(float(mean_raw_score * 100 * 5.0), 95.0), 1)
+    confidenza = round(min(float(mean_raw_score * 100 * 6.0), 95.0), 1)
 
-    st.markdown(f"### 🤖 PREVISIONE MARKOV AVANZATA ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE ULTRA-CHIRURGICA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
@@ -298,8 +354,8 @@ def elabora_previsione(quantita_numeri):
     st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Markov Avanzato")
-st.write("Modello stocastico con Catene di Markov di 2° ordine e decadimento temporale esponenziale.")
+st.title("🤖 Bot 10eLotto - Markov Ultra-Chirurgico")
+st.write("Modello con Catene di Markov avanzate, PMI (Mutual Information) e derivata del Momentum.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -316,7 +372,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e calcolo Markov avanzato in corso..."):
+        with st.spinner("Scraping e calcolo ultra-chirurgico in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -332,10 +388,7 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                # 1. Verifica immediata dell'esito precedente
                 verifica_esito_ultima_giocata(archivio[-1])
-                
-                # 2. Generazione nuova previsione
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
