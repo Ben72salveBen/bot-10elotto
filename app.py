@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Intersezione Voti Pura",
+    page_title="Bot 10eLotto - Intersezione Pura Fix",
     page_icon="🤖",
     layout="centered"
 )
@@ -153,13 +153,17 @@ def verifica_esito_ultima_giocata(ultima_estrazione_obj):
 
 def elabora_previsione(quantita_desiderata):
     archivio = carica_archivio()
-    if len(archivio) == 0:
-        st.warning("Nessuna estrazione in archivio!")
+    if not archivio:
+        st.warning("Nessuna estrazione in archivio! Sincronizza prima dal web.")
         return
 
     ultima_estrazione = archivio[-1]
     numeri_base = set(ultima_estrazione.get('base', []))
     
+    if not numeri_base:
+        st.error("I dati dell'ultima estrazione non contengono i numeri base.")
+        return
+
     righe_vuote = []
     colonne_vuote = []
 
@@ -206,7 +210,7 @@ def elabora_previsione(quantita_desiderata):
                 n = r * 10 + i
                 if n <= 90: fulcri.add(n)
         if not fulcri:
-            fulcri = {15, 30, 45, 60} # Fallburn di sicurezza
+            fulcri = {15, 30, 45, 60}
 
     # 4. Ricostruzione dei vicini (Croce: fulcro + sopra, sotto, sinistra, destra)
     vicini_finali = set()
@@ -215,4 +219,71 @@ def elabora_previsione(quantita_desiderata):
         r_f = (f - 1) // 10
         c_f = (f - 1) % 10
         
-        if c_f > 0: vicini_finali.add(
+        if c_f > 0: vicini_finali.add(f - 1)
+        if c_f < 9: vicini_finali.add(f + 1)
+        if r_f > 0: vicini_finali.add(f - 10)
+        if r_f < 8: vicini_finali.add(f + 10)
+
+    lista_candidati = sorted(list(vicini_finali))
+
+    if len(lista_candidati) >= quantita_desiderata:
+        migliori = lista_candidati[:quantita_desiderata]
+    else:
+        rimanenti = [n for n in range(1, 91) if n not in lista_candidati and n not in numeri_base]
+        while len(lista_candidati) < quantita_desiderata and rimanenti:
+            lista_candidati.append(rimanenti.pop(0))
+        migliori = sorted(lista_candidati[:quantita_desiderata])
+
+    salva_giocata(migliori)
+
+    st.markdown(f"### 🤖 PREVISIONE DA INTERSEZIONE PURA ({quantita_desiderata} NUMERI):")
+    numeri_str = " - ".join(f"{n:02d}" for n in migliori)
+    st.markdown(f"## **` {numeri_str} `**")
+    st.markdown("---")
+
+# Interfaccia Streamlit
+st.title("🤖 Bot 10eLotto - Intersezione Pura")
+st.write("Calcolo del fulcro geometrico esatto dall'incrocio di riga e colonna prive di numeri.")
+
+archivio_corrente = carica_archivio()
+st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
+
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
+
+opzione = st.sidebar.radio(
+    "Scegli un'azione:",
+    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
+)
+
+if opzione == "Scarica Web, Verifica & Previsione":
+    if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
+        with st.spinner("Elaborazione in corso..."):
+            estrazioni = scarica_estrazioni_con_bypass()
+            if estrazioni:
+                archivio = carica_archivio()
+                set_esistenti = {ext['id'] for ext in archivio}
+                for ext in estrazioni:
+                    if ext['id'] not in set_esistenti:
+                        archivio.append(ext)
+                salva_archivio(archivio)
+                st.success("Sincronizzazione completata!")
+                archivio_aggiornato = carica_archivio()
+                if archivio_aggiornato:
+                    verifica_esito_ultima_giocata(archivio_aggiornato[-1])
+                elabora_previsione(quantita)
+            else:
+                st.error("Nessuna estrazione trovata.")
+
+elif opzione == "Genera Solamente Previsione":
+    if st.button("Genera Previsione", type="primary"):
+        elabora_previsione(quantita)
+
+elif opzione == "Visualizza Archivio":
+    st.subheader("📁 Storico Archivio")
+    if not archivio_corrente:
+        st.info("Archivio vuoto.")
+    else:
+        for ext in reversed(archivio_corrente):
+            st.text(f"Concorso #{ext['id']} - Base: {ext.get('base', [])}")
+
+elif opzione
