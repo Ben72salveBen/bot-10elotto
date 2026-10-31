@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Coppie a Distanza 1 & Trend",
+    page_title="Bot 10eLotto - Top 2 Ambi (Ultime 10 Estrazioni)",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,118 +163,64 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Coppie Distanza 1 + Trend)
+# ELABORAZIONE PREVISIONE (Top 2 Ambi ultime 10 estrazioni)
 # ==========================================
-def elabora_previsione(quantita_numeri):
+def elabora_previsione():
     archivio = carica_archivio()
     
-    if len(archivio) < 3:
-        st.warning("Servono almeno 3 estrazioni in archivio per analizzare il trend di decine e cadenze!")
+    if len(archivio) < 10:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 10 estrazioni!")
         return
 
-    st.info("Ricerca coppie a distanza 1 nell'ultima estrazione e filtraggio sul trend termico...")
+    st.info("Analisi delle ultime 10 estrazioni per trovare i 2 ambi più frequenti...")
 
-    # 1. Analisi delle ultime 3 estrazioni per decine e cadenze calde
-    conteggio_decine = {d: 0 for d in range(10)}
-    conteggio_cadenze = {c: 0 for c in range(10)}
+    # Preleviamo esattamente le ultime 10 estrazioni
+    ultime_10 = archivio[-10:]
 
-    for ext in archivio[-3:]:
-        for n in ext:
-            if 1 <= n <= 90:
-                decina = (n - 1) // 10
-                if decina > 8: decina = 8
-                cadenza = n % 10
-                
-                conteggio_decine[decina] += 1
-                conteggio_cadenze[cadenza] += 1
+    # Dizionario per contare gli ambi
+    ambi_count = {}
 
-    decina_calda = max(conteggio_decine, key=conteggio_decine.get)
-    cadenza_calda = max(conteggio_cadenze, key=conteggio_cadenze.get)
+    for ext in ultime_10:
+        ext_sorted = sorted(ext)
+        # Generiamo tutte le coppie possibili (ambi) all'interno dell'estrazione
+        for i in range(len(ext_sorted)):
+            for j in range(i + 1, len(ext_sorted)):
+                ambo = (ext_sorted[i], ext_sorted[j])
+                ambi_count[ambo] = ambi_count.get(ambo, 0) + 1
 
-    # 2. Ultima estrazione ordinata geometricamente
-    ultima_estrazione = sorted(archivio[-1])
+    # Ordiniamo gli ambi per frequenza decrescente
+    ambi_ordinati = sorted(ambi_count.items(), key=lambda x: x[1], reverse=True)
 
-    # 3. Estrazione delle sole coppie con DISTANZA ESATTA DI 1 (consecutivi)
-    coppie_candidate = []
-    for i in range(len(ultima_estrazione) - 1):
-        n1 = ultima_estrazione[i]
-        n2 = ultima_estrazione[i+1]
-        distanza = n2 - n1
-        
-        if distanza == 1:  # Rigorosamente distanza 1
-            punteggio_coppia = 0.0
-            
-            dec_n1, dec_n2 = (n1 - 1) // 10, (n2 - 1) // 10
-            cad_n1, cad_n2 = n1 % 10, n2 % 10
-            
-            # Assegniamo punteggio se la coppia appartiene alla decina o cadenza dominante
-            if dec_n1 == decina_calda or dec_n2 == decina_calda:
-                punteggio_coppia += 3.0
-            if cad_n1 == cadenza_calda or cad_n2 == cadenza_calda:
-                punteggio_coppia += 3.0
+    # Prendiamo i primi 2 ambi più frequenti
+    top_2_ambi = ambi_ordinati[:2]
 
-            coppie_candidate.append({
-                'coppia': (n1, n2),
-                'score': punteggio_coppia
-            })
+    # Estraiamo i numeri unici dai due ambi per formare la combinazione da giocare
+    numeri_giocata = set()
+    for ambo, freq in top_2_ambi:
+        numeri_giocata.add(ambo[0])
+        numeri_giocata.add(ambo[1])
 
-    # Ordiniamo le coppie a distanza 1 in base al riscontro termico
-    coppie_candidate.sort(key=lambda x: x['score'], reverse=True)
-
-    numeri_selezionati = []
-    num_coppie_necessarie = max(1, quantita_numeri // 2)
-
-    # Prendiamo le coppie a distanza 1 migliori
-    for item in coppie_candidate[:num_coppie_necessarie]:
-        n1, n2 = item['coppia']
-        if n1 not in numeri_selezionati: numeri_selezionati.append(n1)
-        if n2 not in numeri_selezionati: numeri_selezionati.append(n2)
-
-    # Se mancano numeri per completare la quantità scelta, peschiamo altri numeri sempre da coppie a distanza 1 disponibili
-    if len(numeri_selezionati) < quantita_numeri:
-        for item in coppie_candidate[num_coppie_necessarie:]:
-            n1, n2 = item['coppia']
-            if n1 not in numeri_selezionati and len(numeri_selezionati) < quantita_numeri:
-                numeri_selezionati.append(n1)
-            if n2 not in numeri_selezionati and len(numeri_selezionati) < quantita_numeri:
-                numeri_selezionati.append(n2)
-            if len(numeri_selezionati) == quantita_numeri:
-                break
-
-    # Se per esaurimento delle coppie a distanza 1 servisse altro, prendiamo il resto dall'estrazione ordinata
-    if len(numeri_selezionati) < quantita_numeri:
-        for num in ultima_estrazione:
-            if num not in numeri_selezionati:
-                numeri_selezionati.append(num)
-                if len(numeri_selezionati) == quantita_numeri:
-                    break
-
-    migliori = sorted(numeri_selezionati[:quantita_numeri])
+    migliori = sorted(list(numeri_giocata))
     salva_giocata(migliori)
 
-    st.markdown(f"### 🤖 PREVISIONE COPPIE DISTANZA 1 ({quantita_numeri} NUMERI):")
+    st.markdown("### 🤖 TOP 2 AMBI (ULTIME 10 ESTRAZIONI):")
+    
+    # Mostriamo chiaramente i due ambi trovati
+    for idx, (ambo, freq) in enumerate(top_2_ambi, 1):
+        st.write(f"• **Ambo #{idx}:** `{ambo[0]:02d} - {ambo[1]:02d}` (Uscito {freq} volte nelle ultime 10)")
+
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
-    st.markdown(f"## **` {numeri_str} `**")
+    st.markdown(f"### Numeri da giocare: ## **` {numeri_str} `**")
 
     st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="🔥 Decina Calda", value=f"Fascia {decina_calda*10+1}-{(decina_calda+1)*10}")
-    with col2:
-        st.metric(label="⚡ Cadenza Calda", value=f"N. {cadenza_calda}")
-    with col3:
-        st.metric(label="🔢 Numeri Scelti", value=f"{quantita_numeri}")
-
-    st.info("📌 **Consiglio Operativo:** Il bot ha selezionato esclusivamente coppie a distanza geometrica 1 (consecutivi) filtrate sul trend attivo. Attiva sempre l'opzione **EXTRA**!")
+    st.info("📌 **Consiglio Operativo:** Questi sono i due ambi più caldi delle ultime 10 estrazioni. Attiva sempre l'opzione **EXTRA**!")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Coppie a Distanza 1")
-st.write("Modello geometrico puro basato esclusivamente su coppie di numeri consecutivi (distanza 1) filtrati sul trend.")
+st.title("🤖 Bot 10eLotto - Analisi Top 2 Ambi")
+st.write("Modello pulito: individua i 2 ambi con maggiore frequenza nelle ultime 10 estrazioni.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -286,7 +232,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e analisi coppie a distanza 1 in corso..."):
+        with st.spinner("Scraping e conteggio ambi in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -303,14 +249,14 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
                 verifica_esito_ultima_giocata(archivio[-1])
-                elabora_previsione(quantita)
+                elabora_previsione()
             else:
                 st.error("Nessuna estrazione trovata sul web.")
 
 elif opzione == "Genera Solamente Previsione":
     if st.button("Genera Previsione da Archivio Locale", type="primary"):
         with st.spinner("Elaborazione previsione in corso..."):
-            elabora_previsione(quantita)
+            elabora_previsione()
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni")
