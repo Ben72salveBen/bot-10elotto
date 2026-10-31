@@ -3,12 +3,11 @@ import json
 import re
 import urllib.request
 import ssl
-import numpy as np
 import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Top 2 Ambi Distinti (Ultime 10 Estrazioni)",
+    page_title="Bot 10eLotto - Filtro Dinamico 35 Numeri",
     page_icon="🤖",
     layout="centered"
 )
@@ -25,8 +24,7 @@ def carica_archivio():
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
-                return archivio_ordinato
+                return archivio
         except Exception as e:
             st.error(f"Errore nella lettura dell'archivio: {e}")
     return []
@@ -96,135 +94,160 @@ def scarica_estrazioni_con_bypass():
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
+                # Estraiamo i 20 base
                 match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
+                # Estraiamo gli extra se presenti
+                match_extra = re.search(r'Extra\s*([\s\S]*?)(?=Doppio|$)', testo_blocco, re.IGNORECASE)
+                
+                numeri_base = []
+                numeri_extra = []
+                
                 if match_num:
-                    testo_sezione = match_num.group(1)
-                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
-                    
-                    numeri_validi = []
+                    pezzi = re.findall(r'\d+', match_num.group(1))
                     visti = set()
-                    
-                    for p in pezzi_cifre:
+                    for p in pezzi:
                         if len(p) > 2 and len(p) % 2 == 0:
                             for j in range(0, len(p), 2):
                                 sub = int(p[j:j+2])
                                 if 1 <= sub <= 90 and sub not in visti:
                                     visti.add(sub)
-                                    numeri_validi.append(sub)
+                                    numeri_base.append(sub)
                         else:
                             val = int(p)
                             if 1 <= val <= 90 and val not in visti:
                                 visti.add(val)
-                                numeri_validi.append(val)
-                                
-                        if len(numeri_validi) == 20:
+                                numeri_base.append(val)
+                        if len(numeri_base) == 20:
                             break
-                    
-                    if len(numeri_validi) == 20:
-                        numeri_validi.sort()
-                        estrazioni_trovate.append({
-                            'id': id_concorso,
-                            'numeri': numeri_validi
-                        })
+
+                if match_extra:
+                    pezzi_ex = re.findall(r'\d+', match_extra.group(1))
+                    visti_ex = set()
+                    for p in pezzi_ex:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti_ex:
+                                    visti_ex.add(sub)
+                                    numeri_extra.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti_ex:
+                                visti_ex.add(val)
+                                numeri_extra.append(val)
+                        if len(numeri_extra) == 15:
+                            break
+
+                if len(numeri_base) == 20:
+                    # Accorpiamo base (20) + extra (fino a 15)
+                    tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
+                    estrazioni_trovate.append({
+                        'id': id_concorso,
+                        'base': sorted(numeri_base),
+                        'tutti': tutti_35
+                    })
 
             if not estrazioni_trovate:
                 return []
 
             estrazioni_trovate.sort(key=lambda x: x['id'])
-            return [item['numeri'] for item in estrazioni_trovate]
+            return estrazioni_trovate
 
     except Exception as e:
         st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
 # ==========================================
-# GESTIONE VERIFICA ULTIMA GIOCATA
+# VERIFICA ESITO ULTIMA GIOCATA
 # ==========================================
-def verifica_esito_ultima_giocata(ultima_estrazione):
+def verifica_esito_ultima_giocata(ultima_estrazione_base):
     ultima_giocata = carica_giocata()
     if not ultima_giocata:
         return
 
     st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
-    set_estratto = set(ultima_estrazione)
+    set_estratto = set(ultima_estrazione_base)
     set_giocati = set(ultima_giocata)
     
     presi = set_giocati.intersection(set_estratto)
     punti = len(presi)
     
     st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
-    st.write(f"• Numeri usciti nell'estrazione: {sorted(list(set_estratto))}")
+    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
     
     if punti >= 2:
         st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
         st.balloons()
     else:
-        st.info(f"ℹ️ Risultato: {punti} punti. Il modello ha registrato l'esito.")
+        st.info(f"ℹ️ Risultato: {punti} punti.")
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Top 2 Ambi con Numeri Diversi)
+# ELABORAZIONE PREVISIONE CON FILTRI
 # ==========================================
-def elabora_previsione():
+def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 10:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 10 estrazioni!")
+    if len(archivio) < 3:
+        st.warning("Servono almeno 3 estrazioni in archivio per applicare i filtri di rotazione!")
         return
 
-    st.info("Analisi delle ultime 10 estrazioni per trovare i 2 ambi più frequenti con numeri completamente diversi...")
+    st.info("Applicazione dei filtri sui 35 numeri (20 base + 15 extra) dell'ultima estrazione...")
 
-    ultime_10 = archivio[-10:]
-    ambi_count = {}
+    ultima_estrazione_obj = archivio[-1]
+    tutti_35 = ultima_estrazione_obj['tutti']
 
-    for ext in ultime_10:
-        ext_sorted = sorted(ext)
-        for i in range(len(ext_sorted)):
-            for j in range(i + 1, len(ext_sorted)):
-                ambo = (ext_sorted[i], ext_sorted[j])
-                ambi_count[ambo] = ambi_count.get(ambo, 0) + 1
+    # Filtro 1: Escludiamo i numeri che sono già usciti nelle 2 estrazioni precedenti (troppo sfruttati)
+    numeri_precedenti_esclusione = set()
+    for ext in archivio[-3:-1]:
+        for n in ext['base']:
+            numeri_precedenti_esclusione.add(n)
 
-    # Ordiniamo gli ambi per frequenza decrescente
-    ambi_ordinati = sorted(ambi_count.items(), key=lambda x: x[1], reverse=True)
+    # Teniamo solo i 35 che NON sono usciti subito prima
+    candidati_filtrati = [n for n in tutti_35 if n not in numeri_precedenti_esclusione]
 
-    top_2_ambi = []
-    numeri_usati = set()
+    # Filtro 2: Isoleremo quelli che formavano coppie a distanza 1 all'interno del blocco
+    candidati_filtrati.sort()
+    coppie_distanza_1 = []
+    
+    for i in range(len(candidati_filtrati) - 1):
+        n1 = candidati_filtrati[i]
+        n2 = candidati_filtrati[i+1]
+        if n2 - n1 == 1:
+            if n1 not in coppie_distanza_1: coppie_distanza_1.append(n1)
+            if n2 not in coppie_distanza_1: coppie_distanza_1.append(n2)
 
-    for ambo, freq in ambi_ordinati:
-        n1, n2 = ambo
-        # Verificiamo che nessuno dei due numeri sia già stato usato nell'altro ambo
-        if n1 not in numeri_usati and n2 not in numeri_usati:
-            top_2_ambi.append((ambo, freq))
-            numeri_usati.add(n1)
-            numeri_usati.add(n2)
-            
-            if len(top_2_ambi) == 2:
-                break
+    # Se abbiamo abbastanza numeri dalle coppie a distanza 1, usiamo quelli, altrimenti integriamo dai filtrati
+    pool_finale = coppie_distanza_1 if len(coppie_distanza_1) >= quantita_numeri else candidati_filtrati
+    
+    if len(pool_finale) < quantita_numeri:
+        pool_finale = tutti_35 # Fallback di sicurezza se il filtro è troppo restrittivo
 
-    if len(top_2_ambi) < 2:
-        st.error("Impossibile trovare 2 ambi completamente distinti nelle ultime 10 estrazioni.")
-        return
-
-    migliori = sorted(list(numeri_usati))
+    # Prendiamo esattamente la quantità richiesta (es. 4 numeri)
+    migliori = sorted(pool_finale[:quantita_numeri])
     salva_giocata(migliori)
 
-    st.markdown("### 🤖 TOP 2 AMBI DISTINTI (ULTIME 10 ESTRAZIONI):")
-    
-    for idx, (ambo, freq) in enumerate(top_2_ambi, 1):
-        st.write(f"• **Ambo #{idx}:** `{ambo[0]:02d} - {ambo[1]:02d}` (Uscito {freq} volte nelle ultime 10)")
-
+    st.markdown(f"### 🤖 PREVISIONE FILTRATA ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
-    st.markdown(f"### Numeri da giocare (4 numeri unici): ## **` {numeri_str} `**")
+    st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
-    st.info("📌 **Consiglio Operativo:** Questi sono i due ambi più frequenti con 4 numeri totalmente indipendenti. Attiva sempre l'opzione **EXTRA**!")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(label="📦 Bacino Analizzato", value="35 Numeri (Base+Extra)")
+    with col2:
+        st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
+
+    st.info("📌 **Logica applicata:** Dal blocco dei 35 numeri dell'ultima estrazione sono stati scartati quelli già usciti di recente e privilegiati i numeri in sequenza geometrica (distanza 1).")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Top 2 Ambi Distinti")
-st.write("Modello pulito: individua i 2 ambi più frequenti nelle ultime 10 estrazioni che non condividono alcun numero.")
+st.title("🤖 Bot 10eLotto - Filtro Dinamico sui 35")
+st.write("Analisi intelligente dei 35 numeri (20 base + 15 extra) con scarto dei ripetuti e filtro di distanza 1.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
+
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -236,31 +259,31 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e conteggio ambi distinti in corso..."):
+        with st.spinner("Scraping estrazioni e filtri in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
-                set_esistenti = {tuple(ext) for ext in archivio}
+                # Salviamo l'intero dizionario per conservare base ed extra
+                set_esistenti = {ext['id'] for ext in archivio}
                 nuove_aggiunte = 0
                 for ext in estrazioni:
-                    chiave = tuple(ext)
-                    if chiave not in set_esistenti:
+                    if ext['id'] not in set_esistenti:
                         archivio.append(ext)
-                        set_esistenti.add(chiave)
+                        set_esistenti.add(ext['id'])
                         nuove_aggiunte += 1
                 
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                verifica_esito_ultima_giocata(archivio[-1])
-                elabora_previsione()
+                verifica_esito_ultima_giocata(archivio[-1]['base'])
+                elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
 
 elif opzione == "Genera Solamente Previsione":
     if st.button("Genera Previsione da Archivio Locale", type="primary"):
         with st.spinner("Elaborazione previsione in corso..."):
-            elabora_previsione()
+            elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Estrazioni")
@@ -269,7 +292,7 @@ elif opzione == "Visualizza Archivio":
         st.info("Archivio vuoto.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
-            st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
+            st.text(f"Concorso #{ext['id']} - Base: {', '.join(map(str, ext['base']))}")
 
 elif opzione == "Svuota Archivio":
     if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
