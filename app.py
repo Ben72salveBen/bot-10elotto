@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Intersezione Voti Griglia",
+    page_title="Bot 10eLotto - Intersezione Voti Pura",
     page_icon="🤖",
     layout="centered"
 )
@@ -24,8 +24,8 @@ def carica_archivio():
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            st.error(f"Errore nella lettura dell'archivio: {e}")
+        except Exception:
+            return []
     return []
 
 def salva_archivio(archivio):
@@ -33,8 +33,7 @@ def salva_archivio(archivio):
         with open(NOME_FILE_ARCHIVIO, "w", encoding="utf-8") as f:
             json.dump(archivio, f, ensure_ascii=False, indent=4)
         return True
-    except Exception as e:
-        st.error(f"Errore salvataggio archivio: {e}")
+    except Exception:
         return False
 
 def salva_giocata(numeri_scelti):
@@ -75,15 +74,12 @@ def estrai_numeri_da_testo(testo, limite):
 
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
-    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
-        'Connection': 'keep-alive',
         'Referer': 'https://lottologia.com/'
     }
-    
     req = urllib.request.Request(url, headers=headers)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -92,16 +88,10 @@ def scarica_estrazioni_con_bypass():
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
             html = response.read().decode('utf-8', 'ignore')
-            
             if "Domande Frequenti" in html:
                 html = html.split("Domande Frequenti")[0]
-            elif "domande frequenti" in html:
-                html = html.split("domande frequenti")[0]
-                
             if "Seleziona Numeri" in html:
                 html = html.split("Seleziona Numeri")[-1]
-            elif "seleziona numeri" in html:
-                html = html.split("seleziona numeri")[-1]
             
             estrazioni_trovate = []
             blocchi = re.split(r'#(\d+)', html)
@@ -109,7 +99,6 @@ def scarica_estrazioni_con_bypass():
             for i in range(1, len(blocchi), 2):
                 id_concorso = int(blocchi[i])
                 testo_blocco = blocchi[i+1]
-                
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
@@ -117,19 +106,13 @@ def scarica_estrazioni_con_bypass():
                 numeri_base = []
                 if match_num:
                     numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
-                
                 if len(numeri_base) < 20:
                     numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
 
-                numeri_extra = []
                 match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
+                numeri_extra = []
                 if match_extra:
                     numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
-                else:
-                    pos_extra = testo_blocco.lower().find('extra')
-                    if pos_extra != -1:
-                        testo_dopo_extra = testo_blocco[pos_extra:]
-                        numeri_extra = estrai_numeri_da_testo(testo_dopo_extra, 15)
 
                 if len(numeri_base) == 20:
                     tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
@@ -142,17 +125,12 @@ def scarica_estrazioni_con_bypass():
 
             if not estrazioni_trovate:
                 return []
-
             estrazioni_trovate.sort(key=lambda x: x['id'])
             return estrazioni_trovate
-
     except Exception as e:
-        st.error(f"Errore di connessione durante lo scraping: {e}")
+        st.error(f"Errore di connessione: {e}")
         return []
 
-# ==========================================
-# VERIFICA ESITO ULTIMA GIOCATA
-# ==========================================
 def verifica_esito_ultima_giocata(ultima_estrazione_obj):
     ultima_giocata = carica_giocata()
     if not ultima_giocata:
@@ -160,7 +138,6 @@ def verifica_esito_ultima_giocata(ultima_estrazione_obj):
 
     st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
     set_giocati = set(ultima_giocata)
-    
     set_base = set(ultima_estrazione_obj.get('base', []))
     presi_base = set_giocati.intersection(set_base)
     punti_base = len(presi_base)
@@ -170,49 +147,23 @@ def verifica_esito_ultima_giocata(ultima_estrazione_obj):
     punti_extra = len(presi_extra)
     
     st.write(f"• **Numeri giocati:** `{sorted(list(set_giocati))}`")
-    
-    st.markdown("#### 🔵 Numeri Base (20 estratti):")
-    st.write(f"• Estratti: `{sorted(list(set_base))}`")
-    if punti_base >= 2:
-        st.success(f"🎉 **BASE VINCENTE! {punti_base} punti realizzati!** (Indovinati: {sorted(list(presi_base))})")
-    else:
-        st.info(f"ℹ️ Base: {punti_base} punti.")
-
-    st.markdown("#### 🟠 Opzione Extra (15 estratti):")
-    if set_extra:
-        st.write(f"• Estratti Extra: `{sorted(list(set_extra))}`")
-        if punti_extra >= 2:
-            st.success(f"🎉 **EXTRA VINCENTE! {punti_extra} punti realizzati!** (Indovinati: {sorted(list(presi_extra))})")
-        else:
-            st.info(f"ℹ️ Extra: {punti_extra} punti.")
-    else:
-        st.warning("⚠️ Dati Extra non disponibili per questa estrazione.")
-        
+    st.markdown(f"• **Base ({punti_base} punti):** {sorted(list(presi_base)) if punti_base > 0 else 'Nessuno'}")
+    st.markdown(f"• **Extra ({punti_extra} punti):** {sorted(list(presi_extra)) if punti_extra > 0 else 'Nessuno'}")
     st.markdown("---")
 
-# ==========================================
-# ELABORAZIONE PREVISIONE: INTERSEZIONE RIGHE/COLONNE VUOTE
-# ==========================================
 def elabora_previsione(quantita_desiderata):
     archivio = carica_archivio()
-    
     if len(archivio) == 0:
-        st.warning("Nessuna estrazione in archivio! Sincronizza prima dal web.")
+        st.warning("Nessuna estrazione in archivio!")
         return
-
-    st.info("Analisi geometrica della griglia 90 numeri (20 numeri base dell'ultima estrazione)...")
 
     ultima_estrazione = archivio[-1]
     numeri_base = set(ultima_estrazione.get('base', []))
     
-    if len(numeri_base) == 0:
-        st.error("I dati dell'ultima estrazione non contengono i numeri base.")
-        return
-
     righe_vuote = []
     colonne_vuote = []
 
-    # 1. Controllo righe (9 righe da 10 numeri)
+    # 1. Individuazione Righe Vuote (9 righe da 10 numeri)
     for r in range(9):
         inizio = r * 10 + 1
         fine = (r + 1) * 10
@@ -220,22 +171,21 @@ def elabora_previsione(quantita_desiderata):
         if len(numeri_base.intersection(numeri_riga)) == 0:
             righe_vuote.append(r)
 
-    # 2. Controllo colonne (10 colonne)
+    # 2. Individuazione Colonne Vuote (10 colonne)
     for c in range(10):
         if c == 9:
             col_nums = [10 + i * 10 for i in range(9)]
         else:
             col_nums = [c + 1 + i * 10 for i in range(9) if (c + 1 + i * 10) <= 90]
-            
         numeri_colonna = set(col_nums)
         if len(numeri_base.intersection(numeri_colonna)) == 0:
             colonne_vuote.append(c)
 
-    st.write(f"• **Righe completamente vuote:** {righe_vuote if righe_vuote else 'Nessuna'}")
-    st.write(f"• **Colonne completamente vuote:** {colonne_vuote if colonne_vuote else 'Nessuna'}")
+    st.write(f"• **Righe vuote trovate (indici 0-8):** {righe_vuote}")
+    st.write(f"• **Colonne vuote trovate (indici 0-9):** {colonne_vuote}")
 
-    # 3. Intersezioni tra righe e colonne vuote
-    numeri_intersezione = []
+    # 3. Estrazione PURA del numero dall'intersezione (Riga x Colonna)
+    intersezioni_pure = []
     for r in righe_vuote:
         for c in colonne_vuote:
             if c == 9:
@@ -243,129 +193,26 @@ def elabora_previsione(quantita_desiderata):
             else:
                 num = r * 10 + (c + 1)
             if 1 <= num <= 90:
-                numeri_intersezione.append(num)
+                intersezioni_pure.append(num)
 
-    fulcri = set(numeri_intersezione)
+    fulcri = set(intersezioni_pure)
 
-    # Se non ci sono intersezioni perfette, prendiamo come fulcri i numeri delle righe o colonne vuote
-    if not fulcri:
-        st.warning("⚠️ Nessuna intersezione perfetta riga/colonna vuota. Uso i numeri delle righe/colonne scoperte.")
+    if fulcri:
+        st.success(f"🎯 **Numero/i esatto/i dall'intersezione (Riga x Colonna vuote):** {sorted(list(fulcri))}")
+    else:
+        st.warning("⚠️ Nessuna intersezione pulita riga/colonna vuota in questa estrazione. Prendo i numeri delle righe vuote.")
         for r in righe_vuote:
             for i in range(1, 11):
                 n = r * 10 + i
                 if n <= 90: fulcri.add(n)
-        for c in colonne_vuote:
-            for i in range(9):
-                n = (i * 10) + (c + 1) if c != 9 else (i + 1) * 10
-                if 1 <= n <= 90: fulcri.add(n)
+        if not fulcri:
+            fulcri = {15, 30, 45, 60} # Fallburn di sicurezza
 
-    # Se ancora siamo a corto di fulcri (es. estrazione densissima), prendiamo i numeri mancanti dall'archivio
-    if not fulcri:
-        st.warning("⚠️ Tabellone molto denso, estendo la ricerca ai numeri meno recenti.")
-        fulcri = set([n for n in range(1, 91) if n not in numeri_base][:15])
-
-    # 4. Aggiunta dei vicini geometrici (Croce: Sopra, Sotto, Sinistra, Destra + Fulcro)
+    # 4. Ricostruzione dei vicini (Croce: fulcro + sopra, sotto, sinistra, destra)
     vicini_finali = set()
     for f in fulcri:
         vicini_finali.add(f)
         r_f = (f - 1) // 10
         c_f = (f - 1) % 10
         
-        # Sinistra
-        if c_f > 0: vicini_finali.add(f - 1)
-        # Destra
-        if c_f < 9: vicini_finali.add(f + 1)
-        # Sopra
-        if r_f > 0: vicini_finali.add(f - 10)
-        # Sotto
-        if r_f < 8: vicini_finali.add(f + 10)
-
-    lista_candidati = sorted(list(vicini_finali))
-
-    # Se abbiamo troppi numeri, prendiamo i primi richiesti dallo slider
-    if len(lista_candidati) >= quantita_desiderata:
-        migliori = lista_candidati[:quantita_desiderata]
-    else:
-        # Se sono pochi, integriamo con numeri casuali/liberi non usciti nell'ultima
-        rimanenti = [n for n in range(1, 91) if n not in lista_candidati and n not in numeri_base]
-        while len(lista_candidati) < quantita_desiderata and rimanenti:
-            lista_candidati.append(rimanenti.pop(0))
-        migliori = sorted(lista_candidati[:quantita_desiderata])
-
-    salva_giocata(migliori)
-
-    st.markdown(f"### 🤖 PREVISIONE GEOMETRICA ({quantita_desiderata} NUMERI):")
-    numeri_str = " - ".join(f"{n:02d}" for n in migliori)
-    st.markdown(f"## **` {numeri_str} `**")
-
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="🎯 Fulcri / Intersezioni", value=len(fulcri))
-    with col2:
-        st.metric(label="🔢 Numeri Giocata", value=len(migliori))
-
-    st.info("📌 **Logica applicata:** Intersezione tra righe/colonne a zero presenze e sviluppo della croce geometrica circostante.")
-
-# Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Intersezione Voti Griglia")
-st.write("Metodo geometrico basato sulle righe e colonne vuote del tabellone a 10 colonne.")
-
-archivio_corrente = carica_archivio()
-st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Menu Operazioni")
-
-opzione = st.sidebar.radio(
-    "Scegli un'azione:",
-    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
-)
-
-if opzione == "Scarica Web, Verifica & Previsione":
-    if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e calcolo geometrico in corso..."):
-            estrazioni = scarica_estrazioni_con_bypass()
-            if len(estrazioni) > 0:
-                archivio = carica_archivio()
-                set_esistenti = {ext['id'] for ext in archivio}
-                nuove_aggiunte = 0
-                for ext in estrazioni:
-                    if ext['id'] not in set_esistenti:
-                        archivio.append(ext)
-                        set_esistenti.add(ext['id'])
-                        nuove_aggiunte += 1
-                
-                salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
-                
-                if len(archivio) > 0:
-                    verifica_esito_ultima_giocata(archivio[-1])
-                
-                elabora_previsione(quantita)
-            else:
-                st.error("Nessuna estrazione trovata sul web.")
-
-elif opzione == "Genera Solamente Previsione":
-    if st.button("Genera Previsione da Archivio Locale", type="primary"):
-        with st.spinner("Elaborazione previsione geometrica in corso..."):
-            elabora_previsione(quantita)
-
-elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni")
-    archivio = carica_archivio()
-    if len(archivio) == 0:
-        st.info("Archivio vuoto.")
-    else:
-        for idx, ext in enumerate(reversed(archivio)):
-            base_str = ', '.join(map(str, ext.get('base', [])))
-            st.text(f"Concorso #{ext['id']}\n  Base: {base_str}\n")
-
-elif opzione == "Svuota Archivio":
-    if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
-        salva_archivio([])
-        if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
-            os.remove(NOME_FILE_ULTIMA_GIOCATA)
-        st.success("Archivio e ultime giocate cancellate con successo.")
+        if c_f > 0: vicini_finali.add(
