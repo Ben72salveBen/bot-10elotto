@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Analisi dei Ripetuti",
+    page_title="Bot 10eLotto - Geometria Strutturale",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,72 +163,78 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Analisi dei Ripetuti)
+# ELABORAZIONE PREVISIONE (Geometria e Struttura Pura)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 5:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 5 estrazioni!")
+    if len(archivio) < 1:
+        st.warning("L'archivio è vuoto. Sincronizza prima le estrazioni!")
         return
 
-    st.info("Analisi dei 20 numeri dell'ultima estrazione per individuare i probabili ripetuti...")
+    st.info("Analisi della geometria strutturale e delle distanze interne dell'ultima estrazione...")
 
-    # Ultima estrazione di riferimento (quella appena uscita)
-    ultima_estrazione = archivio[-1]
-    penultima_estrazione = archivio[-2] if len(archivio) >= 2 else []
-
-    # Calcoliamo la frequenza storica di comparsa nelle ultime 15 estrazioni per ciascuno dei 20 numeri
-    archivio_recente = archivio[-15:]
+    # Prendiamo l'ultima estrazione e la ordiniamo geometricamente
+    ultima_estrazione = sorted(archivio[-1])
     
     valutazioni = []
-    for num in ultima_estrazione:
-        # Conta quante volte questo numero è apparso nelle ultime 15 estrazioni
-        frequenza_storica = sum(1 for ext in archivio_recente if num in ext)
+    
+    for i, num in enumerate(ultima_estrazione):
+        score_strutturale = 0.0
         
-        # Bonus inerzia se era presente anche nella penultima estrazione (doppia presenza consecutiva)
-        inerzia = 2 if num in penultima_estrazione else 1
+        # Distanza dal numero precedente e successivo nella lista ordinata
+        dist_left = (num - ultima_estrazione[i-1]) if i > 0 else 99
+        dist_right = (ultima_estrazione[i+1] - num) if i < len(ultima_estrazione) - 1 else 99
         
-        # Punteggio di persistenza
-        score = frequenza_storica * inerzia
+        # Se il numero si trova all'interno di un cluster ravvicinato (distanza piccola), 
+        # riceve un punteggio di tensione geometrica elevato.
+        if dist_left <= 3:
+            score_strutturale += (4.0 / dist_left)
+        if dist_right <= 3:
+            score_strutturale += (4.0 / dist_right)
+            
+        # Bonus massimo per adiacenza diretta o quasi (coppie o terzine consecutive)
+        if dist_left == 1 or dist_right == 1:
+            score_strutturale += 6.0
+        elif dist_left == 2 or dist_right == 2:
+            score_strutturale += 3.5
 
         valutazioni.append({
             'numero': num,
-            'score': score
+            'score': score_strutturale if score_strutturale > 0 else 1.0
         })
 
-    # Ordiniamo i 20 numeri dell'ultima estrazione in base alla loro propensione a ripetersi
+    # Ordiniamo i numeri in base alla loro densità geometrica/strutturale
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
-    # Selezioniamo esattamente la quantità richiesta dall'utente (consigliato 4)
+    # Selezioniamo la quantità scelta tramite lo slider (es. 4 numeri)
     selezionati = valutazioni[:quantita_numeri]
     migliori = [item['numero'] for item in selezionati]
     migliori.sort()
 
     salva_giocata(migliori)
 
-    st.markdown(f"### 🤖 PREVISIONE RIPETUTI ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE GEOMETRICA STRUTTURALE ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.metric(label="🎯 Numeri Analizzati dall'Ultima", value=f"{len(ultima_estrazione)}")
+        st.metric(label="🎯 Numeri Analizzati", value=f"{len(ultima_estrazione)}")
     with col2:
-        st.metric(label="🔢 Selezionati in base all'Inerzia", value=f"{quantita_numeri}")
+        st.metric(label="🔢 Selezionati per Struttura", value=f"{quantita_numeri}")
 
-    st.info("📌 **Consiglio Operativo:** Questa combinazione pesca direttamente dai 20 numeri appena usciti, puntando sui ripetuti con maggiore inerzia. Attiva sempre l'opzione **EXTRA**!")
+    st.info("📌 **Consiglio Operativo:** Questa previsione ignora le frequenze passate e mappa unicamente la geometria e le distanze dei 20 numeri appena usciti. Attiva sempre l'opzione **EXTRA**!")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Analisi dei Ripetuti")
-st.write("Modello focalizzato esclusivamente sull'individuazione dei numeri che si ripeteranno dall'ultima estrazione.")
+st.title("🤖 Bot 10eLotto - Geometria Strutturale")
+st.write("Modello basato esclusivamente sull'analisi geometrica, spaziale e dei cluster interni dell'ultima estrazione.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-# Slider impostato di default a 4 numeri (la media esatta dei ripetuti)
-quantita = st.sidebar.slider("Quanti ripetuti vuoi selezionare?", min_value=2, max_value=10, value=4)
+quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -240,7 +246,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e analisi dei ripetuti in corso..."):
+        with st.spinner("Scraping e analisi geometrica in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
