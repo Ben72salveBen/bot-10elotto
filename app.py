@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Legame Sequenziale Puro",
+    page_title="Bot 10eLotto - Analisi dei Ripetuti",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,89 +163,72 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Legame Sequenziale Puro)
+# ELABORAZIONE PREVISIONE (Analisi dei Ripetuti)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 10:
-        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 10 estrazioni!")
+    if len(archivio) < 5:
+        st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 5 estrazioni!")
         return
 
-    st.info("Analisi del legame sequenziale puro tra l'estrazione corrente e la successiva...")
+    st.info("Analisi dei 20 numeri dell'ultima estrazione per individuare i probabili ripetuti...")
 
-    # Matrice di transizione pura 90x90 (quante volte j è uscito subito dopo i)
-    transizioni = np.zeros((90, 90), dtype=np.float32)
-
-    # Analizziamo tutto l'archivio disponibile per mappare il legame causa-effetto T -> T+1
-    for k in range(len(archivio) - 1):
-        estrazione_corrente = archivio[k]
-        estrazione_successiva = archivio[k+1]
-        
-        for i in estrazione_corrente:
-            if 1 <= i <= 90:
-                for j in estrazione_successiva:
-                    if 1 <= j <= 90:
-                        transizioni[i-1][j-1] += 1.0
-
-    # Smoothing di Laplace base
-    transizioni += 1.0
-
-    # Normalizzazione per calcolare la probabilità condizionata P(j | i)
-    matrice_prob = transizioni / transizioni.sum(axis=1, keepdims=True)
-
-    # Stato attuale: prendiamo l'ULTIMA estrazione registrata
+    # Ultima estrazione di riferimento (quella appena uscita)
     ultima_estrazione = archivio[-1]
+    penultima_estrazione = archivio[-2] if len(archivio) >= 2 else []
 
-    # Somma delle probabilità dirette ereditate dall'ultima estrazione
-    punteggi = np.zeros(90, dtype=np.float32)
-    for i in ultima_estrazione:
-        if 1 <= i <= 90:
-            punteggi += matrice_prob[i-1]
-
-    # Prepariamo la lista dei 90 numeri con il loro punteggio di transizione pura
+    # Calcoliamo la frequenza storica di comparsa nelle ultime 15 estrazioni per ciascuno dei 20 numeri
+    archivio_recente = archivio[-15:]
+    
     valutazioni = []
-    for i in range(90):
-        num = i + 1
+    for num in ultima_estrazione:
+        # Conta quante volte questo numero è apparso nelle ultime 15 estrazioni
+        frequenza_storica = sum(1 for ext in archivio_recente if num in ext)
+        
+        # Bonus inerzia se era presente anche nella penultima estrazione (doppia presenza consecutiva)
+        inerzia = 2 if num in penultima_estrazione else 1
+        
+        # Punteggio di persistenza
+        score = frequenza_storica * inerzia
+
         valutazioni.append({
             'numero': num,
-            'score': punteggi[i]
+            'score': score
         })
 
-    # Ordiniamo dal punteggio di transizione più alto al più basso
+    # Ordiniamo i 20 numeri dell'ultima estrazione in base alla loro propensione a ripetersi
     valutazioni.sort(key=lambda x: x['score'], reverse=True)
 
-    # Estraiamo direttamente i migliori numeri secondo il legame sequenziale puro
+    # Selezioniamo esattamente la quantità richiesta dall'utente (consigliato 4)
     selezionati = valutazioni[:quantita_numeri]
     migliori = [item['numero'] for item in selezionati]
     migliori.sort()
 
     salva_giocata(migliori)
 
-    mean_score = np.mean([item['score'] for item in selezionati]) if selezionati else 0
-    confidenza = round(min(float(mean_score * 1000.0), 95.0), 1)
-
-    st.markdown(f"### 🤖 PREVISIONE LEGAME SEQUENZIALE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE RIPETUTI ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.metric(label="🎯 Forza del Legame", value=f"{confidenza} %")
+        st.metric(label="🎯 Numeri Analizzati dall'Ultima", value=f"{len(ultima_estrazione)}")
     with col2:
-        st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
+        st.metric(label="🔢 Selezionati in base all'Inerzia", value=f"{quantita_numeri}")
 
-    st.info("📌 **Consiglio Operativo:** Gioca questa combinazione aggiungendo l'opzione **EXTRA ATTIVA**.")
+    st.info("📌 **Consiglio Operativo:** Questa combinazione pesca direttamente dai 20 numeri appena usciti, puntando sui ripetuti con maggiore inerzia. Attiva sempre l'opzione **EXTRA**!")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Legame Sequenziale Puro")
-st.write("Modello basato esclusivamente sulla transizione diretta e sul legame causa-effetto tra un'estrazione e la successiva.")
+st.title("🤖 Bot 10eLotto - Analisi dei Ripetuti")
+st.write("Modello focalizzato esclusivamente sull'individuazione dei numeri che si ripeteranno dall'ultima estrazione.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
 
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
+# Slider impostato di default a 4 numeri (la media esatta dei ripetuti)
+quantita = st.sidebar.slider("Quanti ripetuti vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Menu Operazioni")
@@ -257,7 +240,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e analisi legame sequenziale in corso..."):
+        with st.spinner("Scraping e analisi dei ripetuti in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
