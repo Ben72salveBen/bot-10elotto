@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Intersezione Voti (Griglia 90)",
+    page_title="Bot 10eLotto - Intersezione Voti Griglia",
     page_icon="🤖",
     layout="centered"
 )
@@ -41,7 +41,7 @@ def salva_giocata(numeri_scelti):
     try:
         with open(NOME_FILE_ULTIMA_GIOCATA, "w", encoding="utf-8") as f:
             json.dump(numeri_scelti, f, ensure_ascii=False, indent=4)
-    except Exception as e:
+    except Exception:
         pass
 
 def carica_giocata():
@@ -197,35 +197,31 @@ def elabora_previsione(quantita_desiderata):
     archivio = carica_archivio()
     
     if len(archivio) == 0:
-        st.warning("Nessuna estrazione in archivio!")
+        st.warning("Nessuna estrazione in archivio! Sincronizza prima dal web.")
         return
 
     st.info("Analisi geometrica della griglia 90 numeri (20 numeri base dell'ultima estrazione)...")
 
     ultima_estrazione = archivio[-1]
-    numeri_base = set(ultima_estrazione['base'])
-
-    # 1. Costruiamo la matrice 9x10 (Righe 0-8, Colonne 0-9)
-    # Le righe vanno da 0 a 8 (corrispondono alle decine: 1-10 -> riga 0, 11-20 -> riga 1, ecc.)
-    # Le colonne vanno da 0 a 9 (colonna 0: numeri che finiscono per 1 o 0 a seconda della disposizione, standard 1-10 per riga)
+    numeri_base = set(ultima_estrazione.get('base', []))
     
+    if len(numeri_base) == 0:
+        st.error("I dati dell'ultima estrazione non contengono i numeri base.")
+        return
+
     righe_vuote = []
     colonne_vuote = []
 
-    # Controllo righe (9 righe da 10 numeri ciascuna)
+    # 1. Controllo righe (9 righe da 10 numeri)
     for r in range(9):
         inizio = r * 10 + 1
         fine = (r + 1) * 10
         numeri_riga = set(range(inizio, fine + 1))
-        # Se nessun numero della riga è uscito
         if len(numeri_base.intersection(numeri_riga)) == 0:
             righe_vuote.append(r)
 
-    # Controllo colonne (10 colonne)
+    # 2. Controllo colonne (10 colonne)
     for c in range(10):
-        # I numeri di una colonna c (dove c va da 0 a 9, es. colonna 0 = 1, 11, 21... colonna 9 = 10, 20, 30...)
-        col_nums = [c + 1 + i * 10 for i in range(9)]
-        # Gestione speciale per lo 0 che corrisponde al 10, 20, ecc.
         if c == 9:
             col_nums = [10 + i * 10 for i in range(9)]
         else:
@@ -235,14 +231,13 @@ def elabora_previsione(quantita_desiderata):
         if len(numeri_base.intersection(numeri_colonna)) == 0:
             colonne_vuote.append(c)
 
-    st.write(f"• **Righe completamente vuote identificate:** {len(righe_vuote)} (Indici: {righe_vuote})")
-    st.write(f"• **Colonne completamente vuote identificate:** {len(colonne_vuote)} (Indici: {colonne_vuote})")
+    st.write(f"• **Righe completamente vuote:** {righe_vuote if righe_vuote else 'Nessuna'}")
+    st.write(f"• **Colonne completamente vuote:** {colonne_vuote if colonne_vuote else 'Nessuna'}")
 
-    # 2. Troviamo i numeri di intersezione tra le righe vuote e le colonne vuote
+    # 3. Intersezioni tra righe e colonne vuote
     numeri_intersezione = []
     for r in righe_vuote:
         for c in colonne_vuote:
-            # Calcoliamo il numero esatto dell'intersezione
             if c == 9:
                 num = (r + 1) * 10
             else:
@@ -250,61 +245,52 @@ def elabora_previsione(quantita_desiderata):
             if 1 <= num <= 90:
                 numeri_intersezione.append(num)
 
-    pool_candidati = set()
+    fulcri = set(numeri_intersezione)
 
-    # Se troviamo intersezioni dirette, partiamo da quelle come "fulcro"
-    if numeri_intersezione:
-        st.success(f"🎯 **Trovati numeri di intersezione (Riga Vuota x Colonna Vuota):** {numeri_intersezione}")
-        fulcri = numeri_intersezione
-    else:
-        st.warning("⚠️ Nessuna intersezione perfetta riga/colonna vuota trovata in questa estrazione. Uso le righe o colonne singolarmente.")
-        # Fallback: prendiamo tutti i numeri delle righe vuote o colonne vuote
+    # Se non ci sono intersezioni perfette, prendiamo come fulcri i numeri delle righe o colonne vuote
+    if not fulcri:
+        st.warning("⚠️ Nessuna intersezione perfetta riga/colonna vuota. Uso i numeri delle righe/colonne scoperte.")
         for r in righe_vuote:
             for i in range(1, 11):
                 n = r * 10 + i
-                if n <= 90: pool_candidati.add(n)
+                if n <= 90: fulcri.add(n)
         for c in colonne_vuote:
             for i in range(9):
                 n = (i * 10) + (c + 1) if c != 9 else (i + 1) * 10
-                if 1 <= n <= 90: pool_candidati.add(n)
-        fulcri = list(pool_candidati)
+                if 1 <= n <= 90: fulcri.add(n)
 
-    # 3. Aggiungiamo i vicini geometrici (Sopra, Sotto, Sinistra, Destra sulla griglia 10x9)
+    # Se ancora siamo a corto di fulcri (es. estrazione densissima), prendiamo i numeri mancanti dall'archivio
+    if not fulcri:
+        st.warning("⚠️ Tabellone molto denso, estendo la ricerca ai numeri meno recenti.")
+        fulcri = set([n for n in range(1, 91) if n not in numeri_base][:15])
+
+    # 4. Aggiunta dei vicini geometrici (Croce: Sopra, Sotto, Sinistra, Destra + Fulcro)
     vicini_finali = set()
     for f in fulcri:
-        vicini_finali.add(f) # Aggiungiamo il fulcro stesso
-        
-        # Calcolo riga e colonna del fulcro
+        vicini_finali.add(f)
         r_f = (f - 1) // 10
         c_f = (f - 1) % 10
         
-        # Vicino Sinistra
-        if c_f > 0:
-            vicini_finali.add(f - 1)
-        # Vicino Destra
-        if c_f < 9:
-            vicini_finali.add(f + 1)
-        # Vicino Sopra
-        if r_f > 0:
-            vicini_finali.add(f - 10)
-        # Vicino Sotto
-        if r_f < 8:
-            vicini_finali.add(f + 10)
+        # Sinistra
+        if c_f > 0: vicini_finali.add(f - 1)
+        # Destra
+        if c_f < 9: vicini_finali.add(f + 1)
+        # Sopra
+        if r_f > 0: vicini_finali.add(f - 10)
+        # Sotto
+        if r_f < 8: vicini_finali.add(f + 10)
 
-    # Convertiamo in lista ordinata
-    lista_finale = sorted(list(vicini_finali))
+    lista_candidati = sorted(list(vicini_finali))
 
-    # Se abbiamo troppi o pochi numeri, li adattiamo alla quantità richiesta
-    if len(lista_finale) > quantita_desiderata:
-        migliori = lista_finale[:quantita_desiderata]
-    elif len(lista_finale) < quantita_desiderata:
-        # Integriamo prendendo numeri sparsi se mancano
-        rimanenti = [n for n in range(1, 91) if n not in lista_finale and n not in numeri_base]
-        while len(lista_finale) < quantita_desiderata and rimanenti:
-            lista_finale.append(rimanenti.pop(0))
-        migliori = sorted(lista_finale[:quantita_desiderata])
+    # Se abbiamo troppi numeri, prendiamo i primi richiesti dallo slider
+    if len(lista_candidati) >= quantita_desiderata:
+        migliori = lista_candidati[:quantita_desiderata]
     else:
-        migliori = lista_finale
+        # Se sono pochi, integriamo con numeri casuali/liberi non usciti nell'ultima
+        rimanenti = [n for n in range(1, 91) if n not in lista_candidati and n not in numeri_base]
+        while len(lista_candidati) < quantita_desiderata and rimanenti:
+            lista_candidati.append(rimanenti.pop(0))
+        migliori = sorted(lista_candidati[:quantita_desiderata])
 
     salva_giocata(migliori)
 
@@ -313,7 +299,13 @@ def elabora_previsione(quantita_desiderata):
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
-    st.info("📌 **Logica applicata:** Intersezione geometrica tra righe e colonne con zero presenze nell'ultima estrazione, estesa ai vicini immediati (croce).")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(label="🎯 Fulcri / Intersezioni", value=len(fulcri))
+    with col2:
+        st.metric(label="🔢 Numeri Giocata", value=len(migliori))
+
+    st.info("📌 **Logica applicata:** Intersezione tra righe/colonne a zero presenze e sviluppo della croce geometrica circostante.")
 
 # Interfaccia Grafica Streamlit
 st.title("🤖 Bot 10eLotto - Intersezione Voti Griglia")
@@ -361,4 +353,19 @@ elif opzione == "Genera Solamente Previsione":
         with st.spinner("Elaborazione previsione geometrica in corso..."):
             elabora_previsione(quantita)
 
-elif opzione == "Visual
+elif opzione == "Visualizza Archivio":
+    st.subheader("📁 Storico Estrazioni")
+    archivio = carica_archivio()
+    if len(archivio) == 0:
+        st.info("Archivio vuoto.")
+    else:
+        for idx, ext in enumerate(reversed(archivio)):
+            base_str = ', '.join(map(str, ext.get('base', [])))
+            st.text(f"Concorso #{ext['id']}\n  Base: {base_str}\n")
+
+elif opzione == "Svuota Archivio":
+    if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
+        salva_archivio([])
+        if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
+            os.remove(NOME_FILE_ULTIMA_GIOCATA)
+        st.success("Archivio e ultime giocate cancellate con successo.")
