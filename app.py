@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Solo Intersezione Pura",
+    page_title="Bot 10eLotto - Intersezione Pura (Griglia 10x9)",
     page_icon="🤖",
     layout="centered"
 )
@@ -167,7 +167,7 @@ def elabora_previsione():
     righe_vuote = []
     colonne_vuote = []
 
-    # 1. Individuazione Righe Vuote (9 righe da 10 numeri)
+    # 1. Individuazione Righe Vuote (9 righe, ciascuna da 10 numeri: riga 0 = 1-10, riga 1 = 11-20, ..., riga 8 = 81-90)
     for r in range(9):
         inizio = r * 10 + 1
         fine = (r + 1) * 10
@@ -175,20 +175,21 @@ def elabora_previsione():
         if len(numeri_base.intersection(numeri_riga)) == 0:
             righe_vuote.append(r)
 
-    # 2. Individuazione Colonne Vuote (10 colonne)
+    # 2. Individuazione Colonne Vuote (10 colonne, ciascuna da 9 numeri: colonna 0 = 1,11,21...81, colonna 9 = 10,20...90)
     for c in range(10):
         if c == 9:
             col_nums = [10 + i * 10 for i in range(9)]
         else:
             col_nums = [c + 1 + i * 10 for i in range(9) if (c + 1 + i * 10) <= 90]
+        
         numeri_colonna = set(col_nums)
         if len(numeri_base.intersection(numeri_colonna)) == 0:
             colonne_vuote.append(c)
 
-    st.write(f"• **Righe vuote trovate (0-8):** {righe_vuote if righe_vuote else 'Nessuna'}")
-    st.write(f"• **Colonne vuote trovate (0-9):** {colonne_vuote if colonne_vuote else 'Nessuna'}")
+    st.write(f"• **Righe completamente vuote (0-8):** {righe_vuote if righe_vuote else 'Nessuna'}")
+    st.write(f"• **Colonne completamente vuote (0-9):** {colonne_vuote if colonne_vuote else 'Nessuna'}")
 
-    # 3. Estrazione ESCLUSA di SOLO i numeri derivanti dall'intersezione pura
+    # 3. Estrazione PURA dei numeri all'intersezione tra le 10 colonne e le 9 righe
     intersezioni_pure = []
     for r in righe_vuote:
         for c in colonne_vuote:
@@ -202,20 +203,20 @@ def elabora_previsione():
     migliori = sorted(list(set(intersezioni_pure)))
 
     if not migliori:
-        st.warning("⚠️ In questa estrazione non ci sono intersezioni perfette tra righe e colonne entrambe totalmente vuote.")
+        st.warning("⚠️ In questa estrazione non ci sono intersezioni perfette tra righe e colonne entrambe totalmente vuote nella griglia 10x9.")
         salva_giocata([])
         return
 
     salva_giocata(migliori)
 
-    st.markdown(f"### 🎯 NUMERI USCITI DALL'INTERSEZIONE PURA ({len(migliori)} trovati):")
+    st.markdown(f"### 🎯 NUMERI DALL'INTERSEZIONE PURA ({len(migliori)} trovati):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
     st.markdown("---")
 
 # Interfaccia Streamlit
-st.title("🤖 Bot 10eLotto - Intersezione Pura")
-st.write("Estrazione esclusiva dei numeri posizionati all'incrocio tra righe e colonne prive di presenze.")
+st.title("🤖 Bot 10eLotto - Intersezione Pura (10x9)")
+st.write("Estrazione esclusiva dei numeri all'incrocio tra le 9 righe e le 10 colonne prive di presenze.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
