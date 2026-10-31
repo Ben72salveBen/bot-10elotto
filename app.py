@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Top 2 Ambi (Ultime 10 Estrazioni)",
+    page_title="Bot 10eLotto - Top 2 Ambi Distinti (Ultime 10 Estrazioni)",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,7 +163,7 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Top 2 Ambi ultime 10 estrazioni)
+# ELABORAZIONE PREVISIONE (Top 2 Ambi con Numeri Diversi)
 # ==========================================
 def elabora_previsione():
     archivio = carica_archivio()
@@ -172,17 +172,13 @@ def elabora_previsione():
         st.warning(f"L'archivio contiene {len(archivio)} estrazioni. Servono almeno 10 estrazioni!")
         return
 
-    st.info("Analisi delle ultime 10 estrazioni per trovare i 2 ambi più frequenti...")
+    st.info("Analisi delle ultime 10 estrazioni per trovare i 2 ambi più frequenti con numeri completamente diversi...")
 
-    # Preleviamo esattamente le ultime 10 estrazioni
     ultime_10 = archivio[-10:]
-
-    # Dizionario per contare gli ambi
     ambi_count = {}
 
     for ext in ultime_10:
         ext_sorted = sorted(ext)
-        # Generiamo tutte le coppie possibili (ambi) all'interno dell'estrazione
         for i in range(len(ext_sorted)):
             for j in range(i + 1, len(ext_sorted)):
                 ambo = (ext_sorted[i], ext_sorted[j])
@@ -191,33 +187,41 @@ def elabora_previsione():
     # Ordiniamo gli ambi per frequenza decrescente
     ambi_ordinati = sorted(ambi_count.items(), key=lambda x: x[1], reverse=True)
 
-    # Prendiamo i primi 2 ambi più frequenti
-    top_2_ambi = ambi_ordinati[:2]
+    top_2_ambi = []
+    numeri_usati = set()
 
-    # Estraiamo i numeri unici dai due ambi per formare la combinazione da giocare
-    numeri_giocata = set()
-    for ambo, freq in top_2_ambi:
-        numeri_giocata.add(ambo[0])
-        numeri_giocata.add(ambo[1])
+    for ambo, freq in ambi_ordinati:
+        n1, n2 = ambo
+        # Verificiamo che nessuno dei due numeri sia già stato usato nell'altro ambo
+        if n1 not in numeri_usati and n2 not in numeri_usati:
+            top_2_ambi.append((ambo, freq))
+            numeri_usati.add(n1)
+            numeri_usati.add(n2)
+            
+            if len(top_2_ambi) == 2:
+                break
 
-    migliori = sorted(list(numeri_giocata))
+    if len(top_2_ambi) < 2:
+        st.error("Impossibile trovare 2 ambi completamente distinti nelle ultime 10 estrazioni.")
+        return
+
+    migliori = sorted(list(numeri_usati))
     salva_giocata(migliori)
 
-    st.markdown("### 🤖 TOP 2 AMBI (ULTIME 10 ESTRAZIONI):")
+    st.markdown("### 🤖 TOP 2 AMBI DISTINTI (ULTIME 10 ESTRAZIONI):")
     
-    # Mostriamo chiaramente i due ambi trovati
     for idx, (ambo, freq) in enumerate(top_2_ambi, 1):
         st.write(f"• **Ambo #{idx}:** `{ambo[0]:02d} - {ambo[1]:02d}` (Uscito {freq} volte nelle ultime 10)")
 
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
-    st.markdown(f"### Numeri da giocare: ## **` {numeri_str} `**")
+    st.markdown(f"### Numeri da giocare (4 numeri unici): ## **` {numeri_str} `**")
 
     st.markdown("---")
-    st.info("📌 **Consiglio Operativo:** Questi sono i due ambi più caldi delle ultime 10 estrazioni. Attiva sempre l'opzione **EXTRA**!")
+    st.info("📌 **Consiglio Operativo:** Questi sono i due ambi più frequenti con 4 numeri totalmente indipendenti. Attiva sempre l'opzione **EXTRA**!")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Analisi Top 2 Ambi")
-st.write("Modello pulito: individua i 2 ambi con maggiore frequenza nelle ultime 10 estrazioni.")
+st.title("🤖 Bot 10eLotto - Top 2 Ambi Distinti")
+st.write("Modello pulito: individua i 2 ambi più frequenti nelle ultime 10 estrazioni che non condividono alcun numero.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -232,7 +236,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e conteggio ambi in corso..."):
+        with st.spinner("Scraping e conteggio ambi distinti in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
