@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Intersezione Pura Fix",
+    page_title="Bot 10eLotto - Solo Intersezione Pura",
     page_icon="🤖",
     layout="centered"
 )
@@ -151,7 +151,7 @@ def verifica_esito_ultima_giocata(ultima_estrazione_obj):
     st.markdown(f"• **Extra ({punti_extra} punti):** {sorted(list(presi_extra)) if punti_extra > 0 else 'Nessuno'}")
     st.markdown("---")
 
-def elabora_previsione(quantita_desiderata):
+def elabora_previsione():
     archivio = carica_archivio()
     if not archivio:
         st.warning("Nessuna estrazione in archivio! Sincronizza prima dal web.")
@@ -185,10 +185,10 @@ def elabora_previsione(quantita_desiderata):
         if len(numeri_base.intersection(numeri_colonna)) == 0:
             colonne_vuote.append(c)
 
-    st.write(f"• **Righe vuote trovate (indici 0-8):** {righe_vuote}")
-    st.write(f"• **Colonne vuote trovate (indici 0-9):** {colonne_vuote}")
+    st.write(f"• **Righe vuote trovate (0-8):** {righe_vuote if righe_vuote else 'Nessuna'}")
+    st.write(f"• **Colonne vuote trovate (0-9):** {colonne_vuote if colonne_vuote else 'Nessuna'}")
 
-    # 3. Estrazione PURA del numero dall'intersezione (Riga x Colonna)
+    # 3. Estrazione ESCLUSA di SOLO i numeri derivanti dall'intersezione pura
     intersezioni_pure = []
     for r in righe_vuote:
         for c in colonne_vuote:
@@ -199,56 +199,26 @@ def elabora_previsione(quantita_desiderata):
             if 1 <= num <= 90:
                 intersezioni_pure.append(num)
 
-    fulcri = set(intersezioni_pure)
+    migliori = sorted(list(set(intersezioni_pure)))
 
-    if fulcri:
-        st.success(f"🎯 **Numero/i esatto/i dall'intersezione (Riga x Colonna vuote):** {sorted(list(fulcri))}")
-    else:
-        st.warning("⚠️ Nessuna intersezione pulita riga/colonna vuota in questa estrazione. Prendo i numeri delle righe vuote.")
-        for r in righe_vuote:
-            for i in range(1, 11):
-                n = r * 10 + i
-                if n <= 90: fulcri.add(n)
-        if not fulcri:
-            fulcri = {15, 30, 45, 60}
-
-    # 4. Ricostruzione dei vicini (Croce: fulcro + sopra, sotto, sinistra, destra)
-    vicini_finali = set()
-    for f in fulcri:
-        vicini_finali.add(f)
-        r_f = (f - 1) // 10
-        c_f = (f - 1) % 10
-        
-        if c_f > 0: vicini_finali.add(f - 1)
-        if c_f < 9: vicini_finali.add(f + 1)
-        if r_f > 0: vicini_finali.add(f - 10)
-        if r_f < 8: vicini_finali.add(f + 10)
-
-    lista_candidati = sorted(list(vicini_finali))
-
-    if len(lista_candidati) >= quantita_desiderata:
-        migliori = lista_candidati[:quantita_desiderata]
-    else:
-        rimanenti = [n for n in range(1, 91) if n not in lista_candidati and n not in numeri_base]
-        while len(lista_candidati) < quantita_desiderata and rimanenti:
-            lista_candidati.append(rimanenti.pop(0))
-        migliori = sorted(lista_candidati[:quantita_desiderata])
+    if not migliori:
+        st.warning("⚠️ In questa estrazione non ci sono intersezioni perfette tra righe e colonne entrambe totalmente vuote.")
+        salva_giocata([])
+        return
 
     salva_giocata(migliori)
 
-    st.markdown(f"### 🤖 PREVISIONE DA INTERSEZIONE PURA ({quantita_desiderata} NUMERI):")
+    st.markdown(f"### 🎯 NUMERI USCITI DALL'INTERSEZIONE PURA ({len(migliori)} trovati):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
     st.markdown("---")
 
 # Interfaccia Streamlit
 st.title("🤖 Bot 10eLotto - Intersezione Pura")
-st.write("Calcolo del fulcro geometrico esatto dall'incrocio di riga e colonna prive di numeri.")
+st.write("Estrazione esclusiva dei numeri posizionati all'incrocio tra righe e colonne prive di presenze.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
 opzione = st.sidebar.radio(
     "Scegli un'azione:",
@@ -270,13 +240,13 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 archivio_aggiornato = carica_archivio()
                 if archivio_aggiornato:
                     verifica_esito_ultima_giocata(archivio_aggiornato[-1])
-                elabora_previsione(quantita)
+                elabora_previsione()
             else:
                 st.error("Nessuna estrazione trovata.")
 
 elif opzione == "Genera Solamente Previsione":
     if st.button("Genera Previsione", type="primary"):
-        elabora_previsione(quantita)
+        elabora_previsione()
 
 elif opzione == "Visualizza Archivio":
     st.subheader("📁 Storico Archivio")
@@ -286,4 +256,9 @@ elif opzione == "Visualizza Archivio":
         for ext in reversed(archivio_corrente):
             st.text(f"Concorso #{ext['id']} - Base: {ext.get('base', [])}")
 
-elif opzione
+elif opzione == "Svuota Archivio":
+    if st.button("Conferma Svuotamento"):
+        salva_archivio([])
+        if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
+            os.remove(NOME_FILE_ULTIMA_GIOCATA)
+        st.success("Archivio pulito con successo.")
