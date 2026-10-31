@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Filtro Dinamico 35 Numeri",
+    page_title="Bot 10eLotto - Filtro Dinamico 35 Numeri (Fix Extra)",
     page_icon="🤖",
     layout="centered"
 )
@@ -54,6 +54,26 @@ def carica_giocata():
             return None
     return None
 
+def estrai_numeri_da_testo(testo, limite):
+    pezzi = re.findall(r'\d+', testo)
+    numeri_validi = []
+    visti = set()
+    for p in pezzi:
+        if len(p) > 2 and len(p) % 2 == 0:
+            for j in range(0, len(p), 2):
+                sub = int(p[j:j+2])
+                if 1 <= sub <= 90 and sub not in visti:
+                    visti.add(sub)
+                    numeri_validi.append(sub)
+        else:
+            val = int(p)
+            if 1 <= val <= 90 and val not in visti:
+                visti.add(val)
+                numeri_validi.append(val)
+        if len(numeri_validi) == limite:
+            break
+    return numeri_validi
+
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
     
@@ -94,56 +114,34 @@ def scarica_estrazioni_con_bypass():
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
-                # Estraiamo i 20 base
-                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
-                # Estraiamo gli extra se presenti
-                match_extra = re.search(r'Extra\s*([\s\S]*?)(?=Doppio|$)', testo_blocco, re.IGNORECASE)
-                
+                # Cerchiamo la sezione dei numeri base
+                match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
                 numeri_base = []
-                numeri_extra = []
-                
                 if match_num:
-                    pezzi = re.findall(r'\d+', match_num.group(1))
-                    visti = set()
-                    for p in pezzi:
-                        if len(p) > 2 and len(p) % 2 == 0:
-                            for j in range(0, len(p), 2):
-                                sub = int(p[j:j+2])
-                                if 1 <= sub <= 90 and sub not in visti:
-                                    visti.add(sub)
-                                    numeri_base.append(sub)
-                        else:
-                            val = int(p)
-                            if 1 <= val <= 90 and val not in visti:
-                                visti.add(val)
-                                numeri_base.append(val)
-                        if len(numeri_base) == 20:
-                            break
+                    numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
+                
+                # Se il match principale non basta, prendiamo i primi 20 numeri validi trovati nel blocco
+                if len(numeri_base) < 20:
+                    numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
 
+                # Cerchiamo la sezione EXTRA in modo flessibile
+                numeri_extra = []
+                match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
                 if match_extra:
-                    pezzi_ex = re.findall(r'\d+', match_extra.group(1))
-                    visti_ex = set()
-                    for p in pezzi_ex:
-                        if len(p) > 2 and len(p) % 2 == 0:
-                            for j in range(0, len(p), 2):
-                                sub = int(p[j:j+2])
-                                if 1 <= sub <= 90 and sub not in visti_ex:
-                                    visti_ex.add(sub)
-                                    numeri_extra.append(sub)
-                        else:
-                            val = int(p)
-                            if 1 <= val <= 90 and val not in visti_ex:
-                                visti_ex.add(val)
-                                numeri_extra.append(val)
-                        if len(numeri_extra) == 15:
-                            break
+                    numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
+                else:
+                    # Fallback: cerchiamo la parola extra e prendiamo i numeri successivi
+                    pos_extra = testo_blocco.lower().find('extra')
+                    if pos_extra != -1:
+                        testo_dopo_extra = testo_blocco[pos_extra:]
+                        numeri_extra = estrai_numeri_da_testo(testo_dopo_extra, 15)
 
                 if len(numeri_base) == 20:
-                    # Accorpiamo base (20) + extra (fino a 15)
                     tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
                     estrazioni_trovate.append({
                         'id': id_concorso,
                         'base': sorted(numeri_base),
+                        'extra': sorted(numeri_extra),
                         'tutti': tutti_35
                     })
 
@@ -192,21 +190,20 @@ def elabora_previsione(quantita_numeri):
         st.warning("Servono almeno 3 estrazioni in archivio per applicare i filtri di rotazione!")
         return
 
-    st.info("Applicazione dei filtri sui 35 numeri (20 base + 15 extra) dell'ultima estrazione...")
+    st.info("Applicazione dei filtri sui numeri dell'ultima estrazione (Base + Extra)...")
 
     ultima_estrazione_obj = archivio[-1]
     tutti_35 = ultima_estrazione_obj['tutti']
 
-    # Filtro 1: Escludiamo i numeri che sono già usciti nelle 2 estrazioni precedenti (troppo sfruttati)
+    # Filtro 1: Escludiamo i numeri già usciti nelle 2 estrazioni precedenti
     numeri_precedenti_esclusione = set()
     for ext in archivio[-3:-1]:
-        for n in ext['base']:
+        for n in ext.get('base', []):
             numeri_precedenti_esclusione.add(n)
 
-    # Teniamo solo i 35 che NON sono usciti subito prima
     candidati_filtrati = [n for n in tutti_35 if n not in numeri_precedenti_esclusione]
 
-    # Filtro 2: Isoleremo quelli che formavano coppie a distanza 1 all'interno del blocco
+    # Filtro 2: Isoleremo quelli che formavano coppie a distanza 1
     candidati_filtrati.sort()
     coppie_distanza_1 = []
     
@@ -217,13 +214,11 @@ def elabora_previsione(quantita_numeri):
             if n1 not in coppie_distanza_1: coppie_distanza_1.append(n1)
             if n2 not in coppie_distanza_1: coppie_distanza_1.append(n2)
 
-    # Se abbiamo abbastanza numeri dalle coppie a distanza 1, usiamo quelli, altrimenti integriamo dai filtrati
     pool_finale = coppie_distanza_1 if len(coppie_distanza_1) >= quantita_numeri else candidati_filtrati
     
     if len(pool_finale) < quantita_numeri:
-        pool_finale = tutti_35 # Fallback di sicurezza se il filtro è troppo restrittivo
+        pool_finale = tutti_35
 
-    # Prendiamo esattamente la quantità richiesta (es. 4 numeri)
     migliori = sorted(pool_finale[:quantita_numeri])
     salva_giocata(migliori)
 
@@ -232,17 +227,19 @@ def elabora_previsione(quantita_numeri):
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(label="📦 Bacino Analizzato", value="35 Numeri (Base+Extra)")
+        st.metric(label="🔢 Numeri Base", value=len(ultima_estrazione_obj.get('base', [])))
     with col2:
-        st.metric(label="🔢 Numeri Selezionati", value=f"{quantita_numeri}")
+        st.metric(label="➕ Numeri Extra", value=len(ultima_estrazione_obj.get('extra', [])))
+    with col3:
+        st.metric(label="🎯 Totale Bacino", value=len(tutti_35))
 
-    st.info("📌 **Logica applicata:** Dal blocco dei 35 numeri dell'ultima estrazione sono stati scartati quelli già usciti di recente e privilegiati i numeri in sequenza geometrica (distanza 1).")
+    st.info("📌 **Logica applicata:** Scaricati correttamente i 20 numeri base e i numeri EXTRA, filtrati escludendo i ripetuti recenti e privilegiando le coppie a distanza 1.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Filtro Dinamico sui 35")
-st.write("Analisi intelligente dei 35 numeri (20 base + 15 extra) con scarto dei ripetuti e filtro di distanza 1.")
+st.title("🤖 Bot 10eLotto - Filtro Dinamico (Fix Extra)")
+st.write("Analisi intelligente dei numeri (Base + Extra) con supporto aggiornato per il prelievo dell'opzione Extra.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -259,11 +256,10 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping estrazioni e filtri in corso..."):
+        with st.spinner("Scraping estrazioni (Base + Extra) in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
-                # Salviamo l'intero dizionario per conservare base ed extra
                 set_esistenti = {ext['id'] for ext in archivio}
                 nuove_aggiunte = 0
                 for ext in estrazioni:
@@ -273,7 +269,7 @@ if opzione == "Scarica Web, Verifica & Previsione":
                         nuove_aggiunte += 1
                 
                 salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
+                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate con Extra)")
                 
                 verifica_esito_ultima_giocata(archivio[-1]['base'])
                 elabora_previsione(quantita)
@@ -286,13 +282,15 @@ elif opzione == "Genera Solamente Previsione":
             elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni")
+    st.subheader("📁 Storico Estrazioni (Base & Extra)")
     archivio = carica_archivio()
     if len(archivio) == 0:
         st.info("Archivio vuoto.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
-            st.text(f"Concorso #{ext['id']} - Base: {', '.join(map(str, ext['base']))}")
+            base_str = ', '.join(map(str, ext.get('base', [])))
+            extra_str = ', '.join(map(str, ext.get('extra', []))) if ext.get('extra') else "Nessuno"
+            st.text(f"Concorso #{ext['id']}\n  Base: {base_str}\n  Extra: {extra_str}\n")
 
 elif opzione == "Svuota Archivio":
     if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
