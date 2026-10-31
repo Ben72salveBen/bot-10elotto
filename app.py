@@ -7,7 +7,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Filtro Dinamico 35 Numeri (Fix Extra)",
+    page_title="Bot 10eLotto - Filtro Dinamico (Verifica Base + Extra)",
     page_icon="🤖",
     layout="centered"
 )
@@ -114,23 +114,19 @@ def scarica_estrazioni_con_bypass():
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
-                # Cerchiamo la sezione dei numeri base
                 match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
                 numeri_base = []
                 if match_num:
                     numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
                 
-                # Se il match principale non basta, prendiamo i primi 20 numeri validi trovati nel blocco
                 if len(numeri_base) < 20:
                     numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
 
-                # Cerchiamo la sezione EXTRA in modo flessibile
                 numeri_extra = []
                 match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
                 if match_extra:
                     numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
                 else:
-                    # Fallback: cerchiamo la parola extra e prendiamo i numeri successivi
                     pos_extra = testo_blocco.lower().find('extra')
                     if pos_extra != -1:
                         testo_dopo_extra = testo_blocco[pos_extra:]
@@ -156,28 +152,47 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# VERIFICA ESITO ULTIMA GIOCATA
+# VERIFICA ESITO ULTIMA GIOCATA (BASE + EXTRA)
 # ==========================================
-def verifica_esito_ultima_giocata(ultima_estrazione_base):
+def verifica_esito_ultima_giocata(ultima_estrazione_obj):
     ultima_giocata = carica_giocata()
     if not ultima_giocata:
         return
 
     st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
-    set_estratto = set(ultima_estrazione_base)
     set_giocati = set(ultima_giocata)
     
-    presi = set_giocati.intersection(set_estratto)
-    punti = len(presi)
+    # 1. Controllo sui Numeri Base
+    set_base = set(ultima_estrazione_obj.get('base', []))
+    presi_base = set_giocati.intersection(set_base)
+    punti_base = len(presi_base)
     
-    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
-    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
+    # 2. Controllo sui Numeri Extra
+    set_extra = set(ultima_estrazione_obj.get('extra', []))
+    presi_extra = set_giocati.intersection(set_extra)
+    punti_extra = len(presi_extra)
     
-    if punti >= 2:
-        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
-        st.balloons()
+    st.write(f"• **Numeri giocati:** `{sorted(list(set_giocati))}`")
+    
+    # Esito Base
+    st.markdown("#### 🔵 Numeri Base (20 estratti):")
+    st.write(f"• Estratti: `{sorted(list(set_base))}`")
+    if punti_base >= 2:
+        st.success(f"🎉 **BASE VINCENTE! {punti_base} punti realizzati!** (Indovinati: {sorted(list(presi_base))})")
     else:
-        st.info(f"ℹ️ Risultato: {punti} punti.")
+        st.info(f"ℹ️ Base: {punti_base} punti.")
+
+    # Esito Extra
+    st.markdown("#### 🟠 Opzione Extra (15 estratti):")
+    if set_extra:
+        st.write(f"• Estratti Extra: `{sorted(list(set_extra))}`")
+        if punti_extra >= 2:
+            st.success(f"🎉 **EXTRA VINCENTE! {punti_extra} punti realizzati!** (Indovinati: {sorted(list(presi_extra))})")
+        else:
+            st.info(f"ℹ️ Extra: {punti_extra} punti.")
+    else:
+        st.warning("⚠️ Dati Extra non disponibili per questa estrazione.")
+        
     st.markdown("---")
 
 # ==========================================
@@ -235,11 +250,11 @@ def elabora_previsione(quantita_numeri):
     with col3:
         st.metric(label="🎯 Totale Bacino", value=len(tutti_35))
 
-    st.info("📌 **Logica applicata:** Scaricati correttamente i 20 numeri base e i numeri EXTRA, filtrati escludendo i ripetuti recenti e privilegiando le coppie a distanza 1.")
+    st.info("📌 **Logica applicata:** Previsione generata dai 35 numeri filtrati. Alla prossima sincronizzazione il bot verificherà separatamente Base ed Extra.")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Filtro Dinamico (Fix Extra)")
-st.write("Analisi intelligente dei numeri (Base + Extra) con supporto aggiornato per il prelievo dell'opzione Extra.")
+st.title("🤖 Bot 10eLotto - Verifica Base & Extra")
+st.write("Analisi intelligente dei numeri con controllo esiti separato per estrazione Base e Opzione Extra.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -256,7 +271,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping estrazioni (Base + Extra) in corso..."):
+        with st.spinner("Scraping e verifica esiti in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -269,9 +284,12 @@ if opzione == "Scarica Web, Verifica & Previsione":
                         nuove_aggiunte += 1
                 
                 salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate con Extra)")
+                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                verifica_esito_ultima_giocata(archivio[-1]['base'])
+                # Verifica l'ultima estrazione salvata in archivio rispetto alla giocata precedente
+                if len(archivio) > 0:
+                    verifica_esito_ultima_giocata(archivio[-1])
+                
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
