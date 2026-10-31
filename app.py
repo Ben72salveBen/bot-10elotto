@@ -8,7 +8,7 @@ import streamlit as st
 
 # Configurazione della pagina
 st.set_page_config(
-    page_title="Bot 10eLotto - Geometria Strutturale",
+    page_title="Bot 10eLotto - Coppie a Distanza 1 & Trend",
     page_icon="🤖",
     layout="centered"
 )
@@ -163,73 +163,113 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     st.markdown("---")
 
 # ==========================================
-# ELABORAZIONE PREVISIONE (Geometria e Struttura Pura)
+# ELABORAZIONE PREVISIONE (Coppie Distanza 1 + Trend)
 # ==========================================
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 1:
-        st.warning("L'archivio è vuoto. Sincronizza prima le estrazioni!")
+    if len(archivio) < 3:
+        st.warning("Servono almeno 3 estrazioni in archivio per analizzare il trend di decine e cadenze!")
         return
 
-    st.info("Analisi della geometria strutturale e delle distanze interne dell'ultima estrazione...")
+    st.info("Ricerca coppie a distanza 1 nell'ultima estrazione e filtraggio sul trend termico...")
 
-    # Prendiamo l'ultima estrazione e la ordiniamo geometricamente
+    # 1. Analisi delle ultime 3 estrazioni per decine e cadenze calde
+    conteggio_decine = {d: 0 for d in range(10)}
+    conteggio_cadenze = {c: 0 for c in range(10)}
+
+    for ext in archivio[-3:]:
+        for n in ext:
+            if 1 <= n <= 90:
+                decina = (n - 1) // 10
+                if decina > 8: decina = 8
+                cadenza = n % 10
+                
+                conteggio_decine[decina] += 1
+                conteggio_cadenze[cadenza] += 1
+
+    decina_calda = max(conteggio_decine, key=conteggio_decine.get)
+    cadenza_calda = max(conteggio_cadenze, key=conteggio_cadenze.get)
+
+    # 2. Ultima estrazione ordinata geometricamente
     ultima_estrazione = sorted(archivio[-1])
-    
-    valutazioni = []
-    
-    for i, num in enumerate(ultima_estrazione):
-        score_strutturale = 0.0
+
+    # 3. Estrazione delle sole coppie con DISTANZA ESATTA DI 1 (consecutivi)
+    coppie_candidate = []
+    for i in range(len(ultima_estrazione) - 1):
+        n1 = ultima_estrazione[i]
+        n2 = ultima_estrazione[i+1]
+        distanza = n2 - n1
         
-        # Distanza dal numero precedente e successivo nella lista ordinata
-        dist_left = (num - ultima_estrazione[i-1]) if i > 0 else 99
-        dist_right = (ultima_estrazione[i+1] - num) if i < len(ultima_estrazione) - 1 else 99
-        
-        # Se il numero si trova all'interno di un cluster ravvicinato (distanza piccola), 
-        # riceve un punteggio di tensione geometrica elevato.
-        if dist_left <= 3:
-            score_strutturale += (4.0 / dist_left)
-        if dist_right <= 3:
-            score_strutturale += (4.0 / dist_right)
+        if distanza == 1:  # Rigorosamente distanza 1
+            punteggio_coppia = 0.0
             
-        # Bonus massimo per adiacenza diretta o quasi (coppie o terzine consecutive)
-        if dist_left == 1 or dist_right == 1:
-            score_strutturale += 6.0
-        elif dist_left == 2 or dist_right == 2:
-            score_strutturale += 3.5
+            dec_n1, dec_n2 = (n1 - 1) // 10, (n2 - 1) // 10
+            cad_n1, cad_n2 = n1 % 10, n2 % 10
+            
+            # Assegniamo punteggio se la coppia appartiene alla decina o cadenza dominante
+            if dec_n1 == decina_calda or dec_n2 == decina_calda:
+                punteggio_coppia += 3.0
+            if cad_n1 == cadenza_calda or cad_n2 == cadenza_calda:
+                punteggio_coppia += 3.0
 
-        valutazioni.append({
-            'numero': num,
-            'score': score_strutturale if score_strutturale > 0 else 1.0
-        })
+            coppie_candidate.append({
+                'coppia': (n1, n2),
+                'score': punteggio_coppia
+            })
 
-    # Ordiniamo i numeri in base alla loro densità geometrica/strutturale
-    valutazioni.sort(key=lambda x: x['score'], reverse=True)
+    # Ordiniamo le coppie a distanza 1 in base al riscontro termico
+    coppie_candidate.sort(key=lambda x: x['score'], reverse=True)
 
-    # Selezioniamo la quantità scelta tramite lo slider (es. 4 numeri)
-    selezionati = valutazioni[:quantita_numeri]
-    migliori = [item['numero'] for item in selezionati]
-    migliori.sort()
+    numeri_selezionati = []
+    num_coppie_necessarie = max(1, quantita_numeri // 2)
 
+    # Prendiamo le coppie a distanza 1 migliori
+    for item in coppie_candidate[:num_coppie_necessarie]:
+        n1, n2 = item['coppia']
+        if n1 not in numeri_selezionati: numeri_selezionati.append(n1)
+        if n2 not in numeri_selezionati: numeri_selezionati.append(n2)
+
+    # Se mancano numeri per completare la quantità scelta, peschiamo altri numeri sempre da coppie a distanza 1 disponibili
+    if len(numeri_selezionati) < quantita_numeri:
+        for item in coppie_candidate[num_coppie_necessarie:]:
+            n1, n2 = item['coppia']
+            if n1 not in numeri_selezionati and len(numeri_selezionati) < quantita_numeri:
+                numeri_selezionati.append(n1)
+            if n2 not in numeri_selezionati and len(numeri_selezionati) < quantita_numeri:
+                numeri_selezionati.append(n2)
+            if len(numeri_selezionati) == quantita_numeri:
+                break
+
+    # Se per esaurimento delle coppie a distanza 1 servisse altro, prendiamo il resto dall'estrazione ordinata
+    if len(numeri_selezionati) < quantita_numeri:
+        for num in ultima_estrazione:
+            if num not in numeri_selezionati:
+                numeri_selezionati.append(num)
+                if len(numeri_selezionati) == quantita_numeri:
+                    break
+
+    migliori = sorted(numeri_selezionati[:quantita_numeri])
     salva_giocata(migliori)
 
-    st.markdown(f"### 🤖 PREVISIONE GEOMETRICA STRUTTURALE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE COPPIE DISTANZA 1 ({quantita_numeri} NUMERI):")
     numeri_str = " - ".join(f"{n:02d}" for n in migliori)
     st.markdown(f"## **` {numeri_str} `**")
 
     st.markdown("---")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(label="🎯 Numeri Analizzati", value=f"{len(ultima_estrazione)}")
+        st.metric(label="🔥 Decina Calda", value=f"Fascia {decina_calda*10+1}-{(decina_calda+1)*10}")
     with col2:
-        st.metric(label="🔢 Selezionati per Struttura", value=f"{quantita_numeri}")
+        st.metric(label="⚡ Cadenza Calda", value=f"N. {cadenza_calda}")
+    with col3:
+        st.metric(label="🔢 Numeri Scelti", value=f"{quantita_numeri}")
 
-    st.info("📌 **Consiglio Operativo:** Questa previsione ignora le frequenze passate e mappa unicamente la geometria e le distanze dei 20 numeri appena usciti. Attiva sempre l'opzione **EXTRA**!")
+    st.info("📌 **Consiglio Operativo:** Il bot ha selezionato esclusivamente coppie a distanza geometrica 1 (consecutivi) filtrate sul trend attivo. Attiva sempre l'opzione **EXTRA**!")
 
 # Interfaccia Grafica Streamlit
-st.title("🤖 Bot 10eLotto - Geometria Strutturale")
-st.write("Modello basato esclusivamente sull'analisi geometrica, spaziale e dei cluster interni dell'ultima estrazione.")
+st.title("🤖 Bot 10eLotto - Coppie a Distanza 1")
+st.write("Modello geometrico puro basato esclusivamente su coppie di numeri consecutivi (distanza 1) filtrati sul trend.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -246,7 +286,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping e analisi geometrica in corso..."):
+        with st.spinner("Scraping e analisi coppie a distanza 1 in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
