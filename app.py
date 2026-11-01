@@ -158,36 +158,26 @@ def scarica_estrazioni_con_bypass():
 
     try:
         estrazioni_trovate = []
-        
-        # Rimuoviamo i tag HTML per isolare il testo pulito ed evitare falsi positivi
         testo_pulito = re.sub(r'<[^>]+>', ' | ', html)
-        
-        # Cerchiamo sequenze di numeri interi compresi tra 1 e 90
-        # Spezzettiamo il testo in blocchi per trovare le estrazioni da 20 numeri
         token_testo = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', testo_pulito)
-        
         interi = [int(t) for t in token_testo]
         
-        # Scorriamo la lista cercando finestre valide di estrazioni (ci aspettiamo sequenze con numeri validi del lotto)
         i = 0
         while i < len(interi) - 19:
             finestra = interi[i:i+20]
-            # Verifichiamo che siano tutti numeri tra 1 e 90 univoci o tipici di un'estrazione
-            if len(set(finestra)) >= 15: # tolleranza minima per evitare doppioni interni spuri
-                # Prendiamo i primi 20 numeri unici validi
-                 Estratti_validi = []
-                 for n in finestra:
-                     if 1 <= n <= 90 and n not in Estratti_validi:
-                         Estratti_validi.append(n)
+            if len(set(finestra)) >= 15:
+                estratti_validi = []
+                for n in finestra:
+                    if 1 <= n <= 90 and n not in estratti_validi:
+                        estratti_validi.append(n)
                 
-                if len(Estratti_validi) == 20:
-                    Estratti_validi.sort()
-                    # Creiamo un oggetto estrazione fittizio o strutturato
+                if len(estratti_validi) == 20:
+                    estratti_validi.sort()
                     estrazione_obj = {
                         'id': f"Estrazione_{len(estrazioni_trovate)+1}",
                         'data': 'Oggi',
                         'ora': '',
-                        'numeri': Estratti_validi
+                        'numeri': estratti_validi
                     }
                     if estrazione_obj not in estrazioni_trovate:
                         estrazioni_trovate.append(estrazione_obj)
@@ -251,5 +241,4 @@ def elabora_previsione(quantita_numeri):
 
 # ==========================================
 # INTERFACCIA STREAMLIT (OTTIMIZZATA MOBILE)
-# ==========================================
-st.title("🤖 10eL
+# =================
