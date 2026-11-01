@@ -113,12 +113,12 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
     return candidati[:quantita_richiesta]
 
 # ==========================================
-# SCRAPING AGGIORNATO E PULITO
+# SCRAPING AGGIORNATO (10elotto5.it)
 # ==========================================
 def scarica_estrazioni_con_bypass():
     urls = [
-        "https://www.10elotto5.it/estrazioni-10-e-lotto-ogni-5-minuti-di-oggi/",
-        "https://lottologia.com/10elotto5minuti/estrazioni"
+        "https://www.10elotto5minuti.it/10elotto-5-minuti.php",
+        "https://10elotto5.com/"
     ]
     
     headers = {
@@ -138,7 +138,7 @@ def scarica_estrazioni_con_bypass():
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
                 html = response.read().decode('utf-8', 'ignore')
-                if len(html) > 1000:
+                if len(html) > 500:
                     break
         except Exception:
             continue
@@ -149,37 +149,59 @@ def scarica_estrazioni_con_bypass():
     try:
         estrazioni_trovate = []
         
-        # Cerca pattern numerici puliti di 20 numeri all'interno del codice HTML
-        # Estraiamo sequenze estese e le filtriamo per gruppi validi da 20 numeri compresi tra 1 e 90
-        match_righe = re.findall(r'(?:(\d{1,2})[\s\-,\.]+){19,}(\d{1,2})', html)
-        
-        # In alternativa, usiamo un parsing dei blocchi basato sui numeri separati
-        # Troviamo tutti i numeri singoli o doppi nel testo
-        tutti_i_numeri = []
-        # Pulizia tag HTML grossolana per isolare il testo utile
-        testo_pulito = re.sub(r'<[^>]+>', ' ', html)
-        token_numerici = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', testo_pulito)
-        
-        # Convertiamo in interi e cerchiamo finestre valide da 20 numeri univoci o estratti in sequenza
-        interi = [int(t) for t in token_numerici]
-        
-        # Suddividiamo a blocchi rigorosi da 20 numeri se presenti in sequenza pulita
-        for i in range(0, len(interi) - 19):
-            finestra = interi[i:i+20]
-            # Controllo validità: tutti compresi tra 1 e 90
-            if all(1 <= x <= 90 for x in finestra):
-                # Per evitare duplicati vicini sovrapposti, controlliamo l'unicità o la spaziatura
-                unici_ordinati = sorted(list(set(finestra)))
-                if len(unici_ordinati) == 20:
-                    if unici_ordinati not in estrazioni_trovate:
-                        estrazioni_trovate.append(unici_ordinati)
+        # Estrae tutte le sequenze numeriche presenti nelle tabelle o righe del sito
+        # Cerca righe con sequenze di numeri validi da 1 a 90
+        righe_testo = html.split('\n')
+        for riga in righe_testo:
+            # Estrae tutti i numeri interi validi sulla riga
+            token_numerici = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', riga)
+            if len(token_numerici) >= 20:
+                interi = [int(t) for t in token_numerici]
+                # Prende esattamente i primi 20 numeri validi univoci o in sequenza pulita
+                finestra = []
+                visti = set()
+                for n in interi:
+                    if 1 <= n <= 90 and n not in visti:
+                        visti.add(n)
+                        finestra.append(n)
+                    if len(finestra) == 20:
+                        break
+                
+                if len(finestra) == 20:
+                    finestra.sort()
+                    if finestra not in estrazioni_trovate:
+                        estrazioni_trovate.append(finestra)
 
-        # Se il blocco automatico estrae troppa roba casuale, limitiamo alle ultime valide trovate in ordine
         return estrazioni_trovate[-30:] if len(estrazioni_trovate) > 0 else []
 
     except Exception as e:
         st.error(f"Errore nello scraping: {e}")
         return []
+
+# ==========================================
+# VERIFICA ESITO ULTIMA GIOCATA
+# ==========================================
+def verifica_esito_ultima_giocata(ultima_estrazione):
+    ultima_giocata = carica_giocata()
+    if not ultima_giocata:
+        return
+
+    st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
+    set_estratto = set(ultima_estrazione)
+    set_giocati = set(ultima_giocata)
+    
+    presi = set_giocati.intersection(set_estratto)
+    punti = len(presi)
+    
+    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
+    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
+    
+    if punti >= 2:
+        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
+        st.balloons()
+    else:
+        st.info(f"ℹ️ Risultato: {punti} punti.")
+    st.markdown("---")
 
 # ==========================================
 # ELABORAZIONE PREVISIONE CICLOMETRICA
