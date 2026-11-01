@@ -59,7 +59,7 @@ def carica_giocata():
     return None
 
 # ==========================================
-# MODULO CICLOMETRIA (Sostituisce la Rete Neurale)
+# MODULO CICLOMETRIA ARMONICA (ROBUSTO)
 # ==========================================
 def distanza_ciclometrica(a, b):
     diff = abs(a - b)
@@ -70,14 +70,16 @@ def get_diametrale(n):
     return 90 if diam == 0 else diam
 
 def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
-    """Analizza l'ultima estrazione calcolando diametrali e distanze armoniche geometriche."""
-    candidati = set()
+    """Calcola i candidati ciclometrici in modo sicuro ed evita qualsiasi errore di pool vuoto."""
+    candidati = []
     
-    # 1. Ricerca dei diametrali (distanza 45 sul cerchio 1-90)
+    # 1. Aggiungiamo i diametrali dei numeri usciti
     for n in ultimi_numeri:
-        candidati.add(get_diametrale(n))
+        diam = get_diametrale(n)
+        if diam not in candidati:
+            candidati.append(diam)
         
-    # 2. Analisi delle distanze armoniche tra le coppie estratte (es. 15, 30, 45)
+    # 2. Analizziamo le distanze armoniche (15, 30, 45)
     for i in range(len(ultimi_numeri)):
         for j in range(i + 1, len(ultimi_numeri)):
             n1 = ultimi_numeri[i]
@@ -89,24 +91,25 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
                 comp2 = (n2 - dist) % 90
                 if comp1 == 0: comp1 = 90
                 if comp2 == 0: comp2 = 90
-                candidati.add(comp1)
-                candidati.add(comp2)
                 
-    # Se i candidati ciclometrici sono inferiori alla richiesta, integriamo con i complementari geometrici mancanti
-    pool = list(candidati)
-    if len(pool) < quantita_richiesta:
+                if comp1 not in candidati: candidati.append(comp1)
+                if comp2 not in candidati: candidati.append(comp2)
+                
+    # 3. Riempimento di sicurezza: se non raggiungiamo la quantità richiesta, peschiamo dal cerchio dei 90
+    for n in ultimi_numeri:
+        if n not in candidati:
+            candidati.append(n)
+            
+    if len(candidati) < quantita_richiesta:
         for n in range(1, 91):
-            if n not in pool:
-                pool.append(n)
-                if len(pool) >= quantita_richiesta + 10:
-                    break
-                    
-    # Selezioniamo in modo deterministico basato sulla ciclometria
-    pool.sort()
-    return pool[:quantita_numeri]
+            if n not in candidati:
+                candidati.append(n)
+                
+    candidati.sort()
+    return candidati[:quantita_numeri]
 
 # ==========================================
-# FUNZIONE DI ESTRAZIONE DATI (DAL TUO CODICE)
+# FUNZIONE DI ESTRAZIONE DATI
 # ==========================================
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
@@ -226,14 +229,14 @@ def elabora_previsione(quantita_numeri):
 
     st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
     
-    # Prendiamo l'ultima estrazione registrata
+    # Preleviamo l'ultima estrazione dell'archivio
     ultima_estrazione = archivio[-1]
     
-    # Generazione dei numeri basata esclusivamente sulla ciclometria armonica
+    # Eseguiamo il calcolo geometrico sicuro
     previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
     salva_giocata(previsione)
 
-    # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
+    # Formattazione stringa senza spazi dopo la virgola e virgola finale
     risultato_str = ",".join(map(str, previsione)) + ","
 
     st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
