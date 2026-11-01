@@ -7,7 +7,7 @@ import numpy as np
 import streamlit as st
 
 # ==========================================
-# CONFIGURAZIONE PAGINA (Ottimizzata Mobile)
+# CONFIGURAZIONE PAGINA
 # ==========================================
 st.set_page_config(
     page_title="10eLotto Ciclometry Bot",
@@ -191,8 +191,7 @@ def scarica_estrazioni_con_bypass():
 
         return estrazioni_trovate[-15:] if len(estrazioni_trovate) >= 15 else estrazioni_trovate
 
-    except Exception as e:
-        st.error(f"Errore nello scraping: {e}")
+    except Exception:
         return []
 
 # ==========================================
@@ -210,82 +209,4 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     presi = set_giocati.intersection(set_estratto)
     punti = len(presi)
     
-    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
-    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
-    
-    if punti >= 2:
-        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
-        st.balloons()
-    else:
-        st.info(f"ℹ️ Risultato: {punti} punti.")
-    st.markdown("---")
-
-# ==========================================
-# ELABORAZIONE PREVISIONE CICLOMETRICA
-# ==========================================
-def elabora_previsione(quantita_numeri):
-    archivio = carica_archivio()
-    
-    if len(archivio) < 1:
-        st.warning("Nessuna estrazione valida in archivio. Esegui prima la sincronizzazione.")
-        return
-
-    st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
-    
-    ultima_estrazione = archivio[-1]['numeri']
-    previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
-    salva_giocata(previsione)
-
-    risultato_str = ",".join(map(str, previsione)) + ","
-
-    st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
-    st.code(risultato_str, language="")
-    st.info("📌 **Metodo applicato:** Calcolo geometrico dei diametrici e delle distanze armoniche (15, 30, 45).")
-
-# ==========================================
-# INTERFACCIA PRINCIPALE (Ottimizzata per Telefono)
-# ==========================================
-st.title("🤖 10eLotto Ciclometry Bot")
-st.write("Sistema mobile-friendly basato su Ciclometria armonica.")
-
-archivio_corrente = carica_archivio()
-st.metric(label="Estrazioni in Archivio Locale", value=len(archivio_corrente))
-
-st.markdown("---")
-st.subheader("⚙️ Pannello Operazioni")
-
-quantita = st.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
-
-opzione = st.radio(
-    "Scegli un'azione:",
-    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
-)
-
-st.markdown("---")
-
-if opzione == "Scarica Web, Verifica & Previsione":
-    if st.button("🚀 Avvia Sincronizzazione & Calcolo", type="primary", use_container_width=True):
-        with st.spinner("Scaricamento blocco estrazioni ufficiali in corso..."):
-            estrazioni = scarica_estrazioni_con_bypass()
-            if len(estrazioni) > 0:
-                archivio = carica_archivio()
-                ids_esistenti = {str(item['id']) for item in archivio}
-                nuove_aggiunte = 0
-                for ext in estrazioni:
-                    if str(ext['id']) not in ids_esistenti:
-                        archivio.append(ext)
-                        ids_esistenti.add(str(ext['id']))
-                        nuove_aggiunte += 1
-                
-                salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
-                
-                archivio_aggiornato = carica_archivio()
-                if len(archivio_aggiornato) > 0:
-                    verifica_esito_ultima_giocata(archivio_aggiornato[-1]['numeri'])
-                elabora_previsione(quantita)
-            else:
-                st.error("Impossibile estrarre i dati corretti dal sito. Riprova tra qualche istante.")
-
-elif opzione == "Genera Solamente Previsione":
-    if st.
+    st.write(f"• Numeri giocati: {sorted(list(set_
