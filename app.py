@@ -92,7 +92,7 @@ class NeuralNetworkRMSprop:
         return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# SCRAPING ONLINE DA LOTTOLOGIA
+# SCRAPING ONLINE DA LOTTOLOGIA (CORRETTO E PROFONDO)
 # ==========================================
 def estrai_numeri_da_testo(testo, limite=20):
     pezzi = re.findall(r'\d+', testo)
@@ -115,15 +115,19 @@ def estrai_numeri_da_testo(testo, limite=20):
     return numeri_validi
 
 def scarica_estrazioni_lottologia():
-    url = "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it"
+    # URL multipli per forzare lo scaricamento completo dell'archivio esteso
+    urls = [
+        "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it",
+        "https://lottologia.com/10elotto5minuti/estrazioni"
+    ]
+    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': 'https://lottologia.com/'
     }
     
-    estrazioni = []
-    urls = [url, "https://lottologia.com/10elotto5minuti/estrazioni"]
+    estrazioni_mappa = {}
     
     for u in urls:
         try:
@@ -132,14 +136,17 @@ def scarica_estrazioni_lottologia():
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            with urllib.request.urlopen(req, context=ctx, timeout=20) as response:
                 html = response.read().decode('utf-8', 'ignore')
+                
+                # Scomponiamo la pagina in base ai concorsi identificati dal cancelletto o tag analoghi
                 blocchi = re.split(r'#(\d+)', html)
                 
                 for i in range(1, len(blocchi), 2):
                     id_concorso = int(blocchi[i])
                     testo_blocco = blocchi[i+1]
                     
+                    # Filtriamo ID di concorso reali ed evitiamo numeri anomali
                     if id_concorso < 100 or id_concorso > 9999999:
                         continue
 
@@ -151,27 +158,25 @@ def scarica_estrazioni_lottologia():
                         numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
 
                     if len(numeri_base) == 20:
-                        if not any(e['id'] == id_concorso for e in estrazioni):
-                            estrazioni.append({
-                                'id': id_concorso,
-                                'base': sorted(numeri_base)
-                            })
+                        estrazioni_mappa[id_concorso] = {
+                            'id': id_concorso,
+                            'base': sorted(numeri_base)
+                        }
         except Exception:
             continue
-            
-        if len(estrazioni) >= 20:
-            break
 
-    if estrazioni:
-        estrazioni.sort(key=lambda x: x['id'])
-        return estrazioni
+    if estrazioni_mappa:
+        # Ordiniamo per ID concorso e prendiamo tutte quelle disponibili
+        lista_ordinata = sorted(estrazioni_mappa.values(), key=lambda x: x['id'])
+        return lista_ordinata
+        
     return []
 
 # ==========================================
 # INTERFACCIA STREAMLIT MOBILE
 # ==========================================
 st.title("🤖 10eLotto Neural Bot")
-st.write("Scraping automatico da Lottologia e addestramento sulle **ultime 19 estrazioni**.")
+st.write("Scraping profondo da Lottologia e addestramento sulle **ultime 19 estrazioni**.")
 
 if 'nn' not in st.session_state:
     st.session_state.nn = NeuralNetworkRMSprop()
@@ -186,10 +191,9 @@ if st.button("🔄 Scarica Online & Addestra (Ultime 19)", type="primary"):
         dati_web = scarica_estrazioni_lottologia()
         
         if len(dati_web) >= 19:
-            st.session_state.estrazioni = dati_web[-19:]  # Filtriamo esattamente le ultime 19 estrazioni
+            # Prendiamo esattamente le ultime 19 estrazioni più recenti in fondo alla lista ordinata
+            st.session_state.estrazioni = dati_web[-19:]
             
-            # Preparazione dataset di addestramento dai numeri base
-            # Creiamo una sequenza lineare dei primi numeri estratti o delle sequenze per la rete neurale
             sequenza_numeri = []
             for ext in st.session_state.estrazioni:
                 sequenza_numeri.extend(ext['base'])
@@ -216,19 +220,18 @@ if st.button("🔄 Scarica Online & Addestra (Ultime 19)", type="primary"):
             with st.spinner("Addestramento della rete sulle ultime 19 estrazioni..."):
                 loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
             
-            st.success(f"✅ Addestrate con successo le ultime 19 estrazioni! (Loss: {loss:.4f})")
-            st.info(f"Ultimo Concorso Scaricato: #{st.session_state.estrazioni[-1]['id']}")
+            st.success(f"✅ Sincronizzate e addestrate le ultime 19 estrazioni! (Loss: {loss:.4f})")
+            st.info(f"Ultimo Concorso in archivio: #{st.session_state.estrazioni[-1]['id']}")
         else:
-            st.error(f"Trovate solo {len(dati_web)} estrazioni sul sito. Riprova tra poco.")
+            st.error(f"Trovate solo {len(dati_web)} estrazioni. Riprova tra qualche istante.")
 
 st.markdown("---")
 st.subheader("🎯 Calcola Previsione Corrente")
 
 if st.session_state.estrazioni:
     ultima_ext = st.session_state.estrazioni[-1]['base']
-    st.write(f"Numeri base dell'ultimo concorso (#19): `{ultima_ext}`")
+    st.write(f"Ultimi numeri base (#{st.session_state.estrazioni[-1]['id']}): `{ultima_ext}`")
     
-    # Prendiamo gli ultimi 3 numeri estratti per fare la predizione
     last_3 = ultima_ext[-3:]
     
     if st.button("Genera Previsione Ora"):
@@ -240,4 +243,4 @@ if st.session_state.estrazioni:
         st.markdown("### Previsione Generata:")
         st.code(risultato_str, language="")
 else:
-    st.warning("Premi il pulsante in alto per scaricare le ultime 19 estrazioni online e addestrare il bot.")
+    st.warning("Premi il pulsante in alto per scaricare le estrazioni online e avviare il bot.")
