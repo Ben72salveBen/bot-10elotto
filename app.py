@@ -26,15 +26,20 @@ def carica_archivio():
     if os.path.exists(NOME_FILE_ARCHIVIO):
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
-                return json.load(f)
+                archivio = json.load(f)
+                # Pulisce automaticamente eventuali ID falsi/bassi salvati in precedenza (< 100000)
+                archivio_pulito = [ext for ext in archivio if ext.get('id', 0) >= 100000]
+                return archivio_pulito
         except Exception:
             return []
     return []
 
 def salva_archivio(archivio):
     try:
+        # Filtro di sicurezza prima di salvare
+        archivio_pulito = [ext for ext in archivio if ext.get('id', 0) >= 100000]
         with open(NOME_FILE_ARCHIVIO, "w", encoding="utf-8") as f:
-            json.dump(archivio, f, ensure_ascii=False, indent=4)
+            json.dump(archivio_pulito, f, ensure_ascii=False, indent=4)
         return True
     except Exception:
         return False
@@ -116,7 +121,7 @@ class NeuralNetworkRMSprop:
         return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# SCRAPING ESTREMA PRECISIONE
+# SCRAPING ESTREMA PRECISIONE (CON FILTRO ID FALSI)
 # ==========================================
 def estrai_numeri_da_testo(testo, limite):
     pezzi = re.findall(r'\d+', testo)
@@ -172,6 +177,11 @@ def scarica_estrazioni_con_bypass():
             
             for i in range(1, len(blocchi), 2):
                 id_concorso = int(blocchi[i])
+                
+                # SCARTA GLI ID FALSI/TROPPO BASSI (es. #9776 o indici errati)
+                if id_concorso < 100000:
+                    continue
+
                 testo_blocco = blocchi[i+1]
                 
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
@@ -218,80 +228,107 @@ def scarica_estrazioni_con_bypass():
 # INTERFACCIA STREAMLIT
 # ==========================================
 st.title("🤖 10eLotto Neural Bot (19 Estrazioni)")
-st.write("Rete Neurale One-Hot RMSprop addestrata dinamicamente sulle ultime 19 estrazioni online.")
+st.write("Rete Neurale One-Hot RMSprop addestrata dinamicamente sulle ultime 19 estrazioni online verificate.")
 
 if 'nn' not in st.session_state:
     st.session_state.nn = NeuralNetworkRMSprop()
 
+# MENU LATERALE PER LA GESTIONE E VISUALIZZAZIONE
+menu_scelta = st.sidebar.selectbox("Seleziona Sezione", ["Genera Previsione", "📁 Visualizza Estrazioni Scaricate"])
 quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
-if st.button("🔄 Sincronizza & Addestra (Ultime 19)", type="primary"):
-    with st.spinner("Scaricamento estrazioni online in corso..."):
-        estrazioni_web = scarica_estrazioni_con_bypass()
-        if len(estrazioni_web) > 0:
-            archivio = carica_archivio()
-            set_esistenti = {ext['id'] for ext in archivio}
-            for ext in estrazioni_web:
-                if ext['id'] not in set_esistenti:
-                    archivio.append(ext)
-            
-            archivio.sort(key=lambda x: x['id'])
-            salva_archivio(archivio)
-            st.success(f"Sincronizzazione completata! Totale in archivio: {len(archivio)}")
-            
-            # Preleviamo esattamente le ultime 19 estrazioni più recenti
-            ultime_19 = archivio[-19:]
-            
-            if len(ultime_19) >= 3:
-                sequenza_numeri = []
-                for ext in ultime_19:
-                    sequenza_numeri.extend(ext['base'])
-                
-                X_list, Y_list = [], []
-                for i in range(len(sequenza_numeri) - 3):
-                    seq = sequenza_numeri[i:i+3]
-                    target = sequenza_numeri[i+3]
-                    
-                    x_onehot = np.zeros(270)
-                    for idx, num in enumerate(seq):
-                        if 1 <= num <= 90:
-                            x_onehot[idx * 90 + (num - 1)] = 1.0
-                    X_list.append(x_onehot)
-                    
-                    y_onehot = np.zeros(90)
-                    if 1 <= target <= 90:
-                        y_onehot[target - 1] = 1.0
-                    Y_list.append(y_onehot)
-                
-                X = np.array(X_list)
-                Y = np.array(Y_list)
-                
-                with st.spinner("Addestramento della rete neurale sulle ultime 19 estrazioni..."):
-                    loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
-                
-                st.success(f"✅ Rete addestrata con successo sulle ultime {len(ultime_19)} estrazioni! (Loss: {loss:.4f})")
-            else:
-                st.warning("Ci sono meno di 3 estrazioni totali per avviare il training.")
-        else:
-            st.error("Nessuna estrazione trovata online.")
-
-st.markdown("---")
-st.subheader("🎯 Genera Previsione Corrente")
-
-archivio_corrente = carica_archivio()
-if len(archivio_corrente) > 0:
-    ultima = archivio_corrente[-1]
-    st.write(f"Ultimo Concorso in archivio: **#{ultima['id']}**")
-    st.write(f"Numeri Base: `{ultima['base']}`")
+if menu_scelta == "📁 Visualizza Estrazioni Scaricate":
+    st.subheader("📁 Storico delle Estrazioni Scaricate")
+    archivio_corrente = carica_archivio()
     
-    if st.button("Genera Previsione Ora"):
-        last_3 = ultima['base'][-3:]
-        top_k = st.session_state.nn.predict_top_k(last_3, k=quantita)
-        
-        # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
-        risultato_str = ",".join(map(str, top_k)) + ","
-        
-        st.markdown("### Previsione Neurale:")
-        st.code(risultato_str, language="")
+    if len(archivio_corrente) == 0:
+        st.info("L'archivio è attualmente vuoto o ripulito da ID non validi.")
+    else:
+        st.write(f"Totale concorsi validi in archivio: **{len(archivio_corrente)}**")
+        if st.button("🗑️ Svuota e Pulisci Archivio"):
+            salva_archivio([])
+            st.success("Archivio svuotato con successo!")
+            st.rerun()
+            
+        st.markdown("---")
+        # Mostra le estrazioni dalla più recente alla meno recente
+        for ext in reversed(archivio_corrente):
+            st.markdown(f"**Concorso ID: #{ext['id']}**")
+            st.write(f"• **Base:** `{ext['base']}`")
+            if ext.get('extra'):
+                st.write(f"• **Extra:** `{ext['extra']}`")
+            st.markdown("---")
+
 else:
-    st.warning("L'archivio è vuoto. Clicca su 'Sincronizza & Addestra' per scaricare i dati.")
+    if st.button("🔄 Sincronizza & Addestra (Ultime 19)", type="primary"):
+        with st.spinner("Scaricamento estrazioni online in corso..."):
+            estrazioni_web = scarica_estrazioni_con_bypass()
+            if len(estrazioni_web) > 0:
+                archivio = carica_archivio()
+                set_esistenti = {ext['id'] for ext in archivio}
+                for ext in estrazioni_web:
+                    if ext['id'] not in set_esistenti:
+                        archivio.append(ext)
+                
+                # Pulizia forzata di eventuali ID spuri vecchi
+                archivio = [ext for ext in archivio if ext['id'] >= 100000]
+                archivio.sort(key=lambda x: x['id'])
+                salva_archivio(archivio)
+                st.success(f"Sincronizzazione completata! Totale in archivio valido: {len(archivio)}")
+                
+                # Preleviamo esattamente le ultime 19 estrazioni più recenti
+                ultime_19 = archivio[-19:]
+                
+                if len(ultime_19) >= 3:
+                    sequenza_numeri = []
+                    for ext in ultime_19:
+                        sequenza_numeri.extend(ext['base'])
+                    
+                    X_list, Y_list = [], []
+                    for i in range(len(sequenza_numeri) - 3):
+                        seq = sequenza_numeri[i:i+3]
+                        target = sequenza_numeri[i+3]
+                        
+                        x_onehot = np.zeros(270)
+                        for idx, num in enumerate(seq):
+                            if 1 <= num <= 90:
+                                x_onehot[idx * 90 + (num - 1)] = 1.0
+                        X_list.append(x_onehot)
+                        
+                        y_onehot = np.zeros(90)
+                        if 1 <= target <= 90:
+                            y_onehot[target - 1] = 1.0
+                        Y_list.append(y_onehot)
+                    
+                    X = np.array(X_list)
+                    Y = np.array(Y_list)
+                    
+                    with st.spinner("Addestramento della rete neurale sulle ultime 19 estrazioni..."):
+                        loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
+                    
+                    st.success(f"✅ Rete addestrata con successo sulle ultime {len(ultime_19)} estrazioni! (Loss: {loss:.4f})")
+                else:
+                    st.warning("Ci sono meno di 3 estrazioni totali valide per avviare il training.")
+            else:
+                st.error("Nessuna estrazione trovata online.")
+
+    st.markdown("---")
+    st.subheader("🎯 Genera Previsione Corrente")
+
+    archivio_corrente = carica_archivio()
+    if len(archivio_corrente) > 0:
+        ultima = archivio_corrente[-1]
+        st.write(f"Ultimo Concorso in archivio: **#{ultima['id']}**")
+        st.write(f"Numeri Base: `{ultima['base']}`")
+        
+        if st.button("Genera Previsione Ora"):
+            last_3 = ultima['base'][-3:]
+            top_k = st.session_state.nn.predict_top_k(last_3, k=quantita)
+            
+            # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
+            risultato_str = ",".join(map(str, top_k)) + ","
+            
+            st.markdown("### Previsione Neurale:")
+            st.code(risultato_str, language="")
+    else:
+        st.warning("L'archivio è vuoto. Clicca su 'Sincronizza & Addestra' per scaricare i dati.")
