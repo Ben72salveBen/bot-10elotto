@@ -1,478 +1,167 @@
-import os
-import json
-import re
-import random
-import urllib.request
-import ssl
-from datetime import datetime
-import multiprocessing as mp
 import streamlit as st
+import numpy as np
 
 # ==========================================
-# CONFIGURAZIONE PAGINA
+# CONFIGURAZIONE PAGINA (Ottimizzata per Mobile)
 # ==========================================
 st.set_page_config(
-    page_title="Bot 10eLotto Genetico - Multi-Core",
-    page_icon="🧬",
+    page_title="10eLotto Neural Bot",
+    page_icon="🤖",
     layout="centered"
 )
 
-CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
-if not os.path.exists(CARTELLA_DOCUMENTI):
-    CARTELLA_DOCUMENTI = os.path.expanduser("~")
+# ==========================================
+# RETE NEURALE MULTI-STRATO (270-64-90) + RMSPROP
+# ==========================================
+class NeuralNetworkRMSprop:
+    def __init__(self, input_size=270, hidden_size=64, output_size=90):
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        
+        # Inizializzazione pesi
+        self.W1 = np.random.randn(input_size, hidden_size) * np.sqrt(2.0 / input_size)
+        self.b1 = np.zeros((1, hidden_size))
+        self.W2 = np.random.randn(hidden_size, output_size) * np.sqrt(2.0 / hidden_size)
+        self.b2 = np.zeros((1, output_size))
+        
+        # Accumulatori RMSprop
+        self.v_W1 = np.zeros_like(self.W1)
+        self.v_b1 = np.zeros_like(self.b1)
+        self.v_W2 = np.zeros_like(self.W2)
+        self.v_b2 = np.zeros_like(self.b2)
 
-NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
-NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata.json")
+    def forward(self, X):
+        z1 = np.dot(X, self.W1) + self.b1
+        a1 = np.maximum(0, z1)  # ReLU
+        z2 = np.dot(a1, self.W2) + self.b2
+        
+        exp_z = np.exp(z2 - np.max(z2, axis=1, keepdims=True))
+        probs = exp_z / np.sum(exp_z, axis=1, keepdims=True)
+        return z1, a1, probs
 
-def carica_archivio():
-    if os.path.exists(NOME_FILE_ARCHIVIO):
-        try:
-            with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
+    def train_fast(self, X, Y, epochs=50, lr=0.001, beta=0.9, eps=1e-8):
+        if X is None or len(X) == 0:
+            return 0.0
+        
+        m = X.shape[0]
+        
+        for _ in range(epochs):
+            z1, a1, probs = self.forward(X)
+            
+            dz2 = probs - Y
+            dW2 = np.dot(a1.T, dz2) / m
+            db2 = np.sum(dz2, axis=0, keepdims=True) / m
+            
+            da1 = np.dot(dz2, self.W2.T)
+            dz1 = da1 * (z1 > 0)
+            dW1 = np.dot(X.T, dz1) / m
+            db1 = np.sum(dz1, axis=0, keepdims=True) / m
+            
+            self.v_W1 = beta * self.v_W1 + (1 - beta) * (dW1 ** 2)
+            self.v_b1 = beta * self.v_b1 + (1 - beta) * (db1 ** 2)
+            self.v_W2 = beta * self.v_W2 + (1 - beta) * (dW2 ** 2)
+            self.v_b2 = beta * self.v_b2 + (1 - beta) * (db2 ** 2)
+            
+            self.W1 -= (lr / (np.sqrt(self.v_W1) + eps)) * dW1
+            self.b1 -= (lr / (np.sqrt(self.v_b1) + eps)) * db1
+            self.W2 -= (lr / (np.sqrt(self.v_W2) + eps)) * dW2
+            self.b2 -= (lr / (np.sqrt(self.v_b2) + eps)) * db2
+            
+        loss = -np.mean(np.sum(Y * np.log(probs + 1e-8), axis=1))
+        return loss
+
+    def predict_top_k(self, last_3, k=4):
+        if len(last_3) < 3:
             return []
-    return []
-
-def salva_archivio(archivio):
-    try:
-        with open(NOME_FILE_ARCHIVIO, "w", encoding="utf-8") as f:
-            json.dump(archivio, f, ensure_ascii=False, indent=4)
-        return True
-    except Exception:
-        return False
-
-# ==========================================
-# UTILITY GEOMETRICHE GRIGLIA 10x9 (1-90)
-# ==========================================
-def get_cadenza(numero):
-    return numero % 10
-
-def get_decina(numero):
-    return (numero - 1) // 10
-
-def get_vicini_griglia(numero, raggio=1):
-    if not (1 <= numero <= 90):
-        return []
-    
-    r = (numero - 1) // 10
-    c = (numero - 1) % 10
-    vicini = []
-    
-    for dr in range(-raggio, raggio + 1):
-        for dc in range(-raggio, raggio + 1):
-            nr = r + dr
-            nc = c + dc
-            if 0 <= nr <= 8 and 0 <= nc <= 9:
-                num_vicino = nr * 10 + nc + 1
-                if 1 <= num_vicino <= 90:
-                    vicini.append(num_vicino)
-                    
-    return list(dict.fromkeys(vicini))
-
-# ==========================================
-# CLASSE CROMOSOMA (REGOLE DI TRANSIZIONE 10eLotto)
-# ==========================================
-class CromosomaRegola10eLotto:
-    def __init__(self):
-        self.usa_innesco_cadenza = random.choice([True, False])
-        self.usa_innesco_decina = random.choice([True, False])
-        self.usa_innesco_ritardo = random.choice([True, False])
+            
+        x_onehot = np.zeros(270)
+        for idx, num in enumerate(last_3):
+            if 1 <= num <= 90:
+                x_onehot[idx * 90 + (num - 1)] = 1.0
+            
+        X = x_onehot.reshape(1, -1)
+        _, _, probs = self.forward(X)
         
-        if not (self.usa_innesco_cadenza or self.usa_innesco_decina or self.usa_innesco_ritardo):
-            self.usa_innesco_cadenza = True
-
-        self.window_cad = random.randint(5, 15)
-        self.min_freq_cad = random.randint(3, 7)
-        
-        self.window_decina = random.randint(5, 12)
-        self.min_densita_decina = random.choice([20.0, 30.0, 40.0])
-        
-        self.max_ritardo_rientro = random.randint(2, 6)
-
-        self.tipo_output = random.choice([
-            "EXPAND_CADENZA",
-            "EXPAND_VICINI_GRIGLIA",
-            "HYBRID_CAD_VICINI"
-        ])
-
-    def check_innesco(self, history_draws):
-        if len(history_draws) < 10:
-            return False
-
-        ultima_estrazione = history_draws[-1].get('base', [])
-        if not ultima_estrazione:
-            return False
-        riferimento = ultima_estrazione[0]
-        
-        esiti = []
-
-        if self.usa_innesco_cadenza:
-            cad_rif = get_cadenza(riferimento)
-            sub_finestra = history_draws[-self.window_cad:-1]
-            freq = sum(1 for ext in sub_finestra for n in ext.get('base', []) if get_cadenza(n) == cad_rif)
-            esiti.append(freq >= self.min_freq_cad)
-
-        if self.usa_innesco_decina:
-            dec_rif = get_decina(riferimento)
-            sub_finestra = history_draws[-self.window_decina:-1]
-            tot_numeri = sum(len(ext.get('base', [])) for ext in sub_finestra)
-            presenze = sum(1 for ext in sub_finestra for n in ext.get('base', []) if get_decina(n) == dec_rif)
-            pct = (presenze / tot_numeri) * 100.0 if tot_numeri > 0 else 0
-            esiti.append(pct >= self.min_densita_decina)
-
-        if self.usa_innesco_ritardo:
-            sub_finestra = history_draws[-self.max_ritardo_rientro-1:-1]
-            presente_recente = any(riferimento in ext.get('base', []) for ext in sub_finestra)
-            esiti.append(presente_recente)
-
-        return all(esiti) if esiti else False
-
-    def genera_output(self, ultima_estrazione_obj, target_n):
-        base = ultima_estrazione_obj.get('base', [])
-        if not base:
-            return list(range(1, target_n + 1))
-            
-        ultimo_num = base[0]
-        numeri = []
-
-        if self.tipo_output == "EXPAND_CADENZA":
-            cad = get_cadenza(ultimo_num)
-            numeri = [n for n in range(1, 91) if n % 10 == cad]
-
-        elif self.tipo_output == "EXPAND_VICINI_GRIGLIA":
-            numeri = get_vicini_griglia(ultimo_num, raggio=2)
-
-        elif self.tipo_output == "HYBRID_CAD_VICINI":
-            cad = get_cadenza(ultimo_num)
-            cad_nums = [n for n in range(1, 91) if n % 10 == cad]
-            vicini = get_vicini_griglia(ultimo_num, raggio=1)
-            numeri = list(dict.fromkeys(cad_nums + vicini))
-
-        raggio = 1
-        while len(numeri) < target_n and raggio <= 5:
-            extra = get_vicini_griglia(ultimo_num, raggio)
-            for e in extra:
-                if e not in numeri:
-                    numeri.append(e)
-            raggio += 1
-
-        for n in range(1, 91):
-            if len(numeri) >= target_n:
-                break
-            if n not in numeri:
-                numeri.append(n)
-
-        return sorted([int(x) for x in numeri[:target_n]])
-
-    def mutazione(self):
-        if random.random() < 0.2:
-            self.usa_innesco_cadenza = not self.usa_innesco_cadenza
-        if random.random() < 0.2:
-            self.usa_innesco_decina = not self.usa_innesco_decina
-        if random.random() < 0.2:
-            self.usa_innesco_ritardo = not self.usa_innesco_ritardo
-            
-        if not (self.usa_innesco_cadenza or self.usa_innesco_decina or self.usa_innesco_ritardo):
-            self.usa_innesco_cadenza = True
-
-        self.window_cad = max(3, self.window_cad + random.choice([-1, 1]))
-        self.min_freq_cad = max(1, self.min_freq_cad + random.choice([-1, 1]))
-        
-        if random.random() < 0.15:
-            self.tipo_output = random.choice(["EXPAND_CADENZA", "EXPAND_VICINI_GRIGLIA", "HYBRID_CAD_VICINI"])
-
-    def to_dict(self):
-        return {
-            "usa_innesco_cadenza": self.usa_innesco_cadenza,
-            "usa_innesco_decina": self.usa_innesco_decina,
-            "usa_innesco_ritardo": self.usa_innesco_ritardo,
-            "window_cad": int(self.window_cad),
-            "min_freq_cad": int(self.min_freq_cad),
-            "window_decina": int(self.window_decina),
-            "min_densita_decina": float(self.min_densita_decina),
-            "max_ritardo_rientro": int(self.max_ritardo_rientro),
-            "tipo_output": self.tipo_output
-        }
-
-    @staticmethod
-    def from_dict(d):
-        c = CromosomaRegola10eLotto()
-        c.usa_innesco_cadenza = d["usa_innesco_cadenza"]
-        c.usa_innesco_decina = d["usa_innesco_decina"]
-        c.usa_innesco_ritardo = d["usa_innesco_ritardo"]
-        c.window_cad = d["window_cad"]
-        c.min_freq_cad = d["min_freq_cad"]
-        c.window_decina = d["window_decina"]
-        c.min_densita_decina = d["min_densita_decina"]
-        c.max_ritardo_rientro = d["max_ritardo_rientro"]
-        c.tipo_output = d["tipo_output"]
-        return c
+        top_k_indices = np.argsort(probs[0])[-k:]
+        return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# FITNESS & VALUTAZIONE PARALLELA
+# INTERFACCIA STREAMLIT (Mobile Friendly)
 # ==========================================
-def eval_cromosoma(cro, history_draws, target_n):
-    totale_estrazioni = len(history_draws)
-    inneschi_totali = 0
-    vincite = 0
-    punti_totali_realizzati = 0
-    
-    for i in range(10, totale_estrazioni - 1):
-        sub_history = history_draws[:i+1]
-        if cro.check_innesco(sub_history):
-            inneschi_totali += 1
-            ultima = sub_history[-1]
-            previsione = set(cro.genera_output(ultima, target_n))
-            
-            estrazione_successiva = history_draws[i+1].get('base', [])
-            intersezione = previsione.intersection(estrazione_successiva)
-            punti = len(intersezione)
-            punti_totali_realizzati += punti
-            
-            if punti >= 2:
-                vincite += 1
+st.title("🤖 10eLotto Neural Bot")
+st.write("Propagazione One-Hot & RMSprop ottimizzata per smartphone.")
 
-    if inneschi_totali == 0:
-        return 0.0, 0, 0.0
+# Inizializzazione stato sessione per mantenere la rete attiva
+if 'nn' not in st.session_state:
+    st.session_state.nn = NeuralNetworkRMSprop()
+if 'trained' not in st.session_state:
+    st.session_state.trained = False
 
-    win_rate = (vincite / inneschi_totali) * 100.0
-    media_punti = punti_totali_realizzati / inneschi_totali
+st.markdown("---")
+st.subheader("1. Carica Storico / Botstorico (1-90)")
+storico_text = st.text_area("Incolla i numeri separati da virgola o spazio:", height=120)
 
-    fitness_finale = (win_rate * 10) + (media_punti * 50) + inneschi_totali
-    return fitness_finale, inneschi_totali, win_rate
+target_count = st.slider("Quanti numeri vuoi generare in previsione?", min_value=2, max_value=10, value=4)
 
-def _eval_wrapper(args):
-    cro, history_draws, target_n = args
-    return eval_cromosoma(cro, history_draws, target_n)
-
-def addestra_modello_genetico(history_draws, pop_size, max_gen, target_n, progress_bar=None):
-    num_cores = max(1, mp.cpu_count() - 1)
-    popolazione = [CromosomaRegola10eLotto() for _ in range(pop_size)]
-    miglior_fitness = -1.0
-    miglior_regola = popolazione[0]
-
-    with mp.Pool(processes=num_cores) as pool:
-        for gen in range(1, max_gen + 1):
-            tasks = [(c, history_draws, target_n) for c in popolazione]
-            risultati = pool.map(_eval_wrapper, tasks)
-
-            pop_valutata = []
-            for i, cro in enumerate(popolazione):
-                fit, inneschi, wr = risultati[i]
-                if fit > miglior_fitness:
-                    miglior_fitness = fit
-                    miglior_regola = cro
-                pop_valutata.append((fit, inneschi, wr, cro))
-            
-            pop_valutata.sort(key=lambda x: x[0], reverse=True)
-
-            if progress_bar:
-                progress_bar.progress(gen / max_gen, text=f"Generazione {gen}/{max_gen} - Miglior Fitness: {miglior_fitness:.1f}")
-
-            nuova_pop = [pop_valutata[0][3]]
-            while len(nuova_pop) < pop_size:
-                cand1, cand2, cand3 = random.sample(popolazione, 3)
-                f1 = risultati[popolazione.index(cand1)][0]
-                f2 = risultati[popolazione.index(cand2)][0]
-                f3 = risultati[popolazione.index(cand3)][0]
-                
-                vincitore = cand1 if f1 >= f2 and f1 >= f3 else (cand2 if f2 >= f3 else cand3)
-                figlio = CromosomaRegola10eLotto.from_dict(vincitore.to_dict())
-                figlio.mutazione()
-                nuova_pop.append(figlio)
-
-            popolazione = nuova_pop
-
-    return miglior_regola
-
-# ==========================================
-# SCRAPING ROBUSTO E PULIZIA ID CONCORSO
-# ==========================================
-def estrai_numeri_da_testo(testo, limite):
-    pezzi = re.findall(r'\d+', testo)
-    numeri_validi = []
-    visti = set()
-    for p in pezzi:
-        if len(p) > 2 and len(p) % 2 == 0:
-            for j in range(0, len(p), 2):
-                sub = int(p[j:j+2])
-                if 1 <= sub <= 90 and sub not in visti:
-                    visti.add(sub)
-                    numeri_validi.append(sub)
-        else:
-            val = int(p)
-            if 1 <= val <= 90 and val not in visti:
-                visti.add(val)
-                numeri_validi.append(val)
-        if len(numeri_validi) == limite:
-            break
-    return numeri_validi
-
-def scarica_estrazioni_con_bypass():
-    url = "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Referer': 'https://lottologia.com/'
-    }
-    
-    estrazioni_trovate = []
-    urls_da_provare = [url, "https://lottologia.com/10elotto5minuti/estrazioni"]
-    
-    for target_url in urls_da_provare:
-        try:
-            req = urllib.request.Request(target_url, headers=headers)
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            
-            with urllib.request.urlopen(req, context=ctx, timeout=20) as response:
-                html = response.read().decode('utf-8', 'ignore')
-                
-                # Cerchiamo i blocchi identificati da cancelletto seguiti da numeri reali di concorso
-                blocchi = re.split(r'#(\d+)', html)
-                for i in range(1, len(blocchi), 2):
-                    id_candidato = int(blocchi[i])
-                    testo_blocco = blocchi[i+1]
-                    
-                    # Filtriamo ID spuri o date scambiate per ID (i concorsi validi del 10eLotto hanno solitamente valori coerenti)
-                    if id_candidato < 100 or id_candidato > 9999999:
-                        continue
-
-                    tutti_pezzi_grezzi = re.findall(r'\d+', testo_blocco)
-                    if len(tutti_pezzi_grezzi) < 25:
-                        continue
-                    
-                    match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
-                    numeri_base = []
-                    if match_num:
-                        numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
-                    if len(numeri_base) < 20:
-                        numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
-
-                    match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
-                    numeri_extra = []
-                    if match_extra:
-                        numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
-
-                    if len(numeri_base) == 20:
-                        tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
-                        if not any(e['id'] == id_candidato for e in estrazioni_trovate):
-                            estrazioni_trovate.append({
-                                'id': id_candidato,
-                                'base': sorted(numeri_base),
-                                'extra': sorted(numeri_extra),
-                                'tutti': tutti_35
-                            })
-        except Exception:
-            continue
-            
-        if len(estrazioni_trovate) >= 30:
-            break
-
-    if estrazioni_trovate:
-        estrazioni_trovate.sort(key=lambda x: x['id'])
-        return estrazioni_trovate
-        
-    return []
-
-# ==========================================
-# INTERFACCIA STREAMLIT
-# ==========================================
-st.title("🧬 Bot 10eLotto Genetico - Multi-Core")
-st.write("Sistema evolutivo integrato con validazione ID concorso e soglia minima a 19 estrazioni.")
-
-menu = st.sidebar.selectbox("Menu", ["Previsione & Verifica", "Addestra Nuovo Modello", "Gestione Archivio"])
-
-archivio = carica_archivio()
-
-if menu == "Addestra Nuovo Modello":
-    st.subheader("🏋️ Addestramento Modello Genetico")
-    pop_size = st.slider("Dimensione Popolazione", 50, 300, 100)
-    max_gen = st.slider("Generazioni", 20, 200, 50)
-    target_n = st.slider("Numeri da prevedere (Target)", 2, 10, 4)
-    
-    if st.button("Avvia Sincronizzazione Web & Addestramento", type="primary"):
-        with st.spinner("Scaricamento e validazione archivio in corso..."):
-            estrazioni_web = scarica_estrazioni_con_bypass()
-            if len(estrazioni_web) >= 10:
-                esistenti = {e['id']: e for e in archivio}
-                for ext in estrazioni_web:
-                    esistenti[ext['id']] = ext
-                archivio = list(esistenti.values())
-                archivio.sort(key=lambda x: x['id'])
-                salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! Totale concorsi validi in archivio: {len(archivio)}")
-            else:
-                st.warning("Impossibile scaricare dal web. Uso l'archivio locale disponibile.")
-                
-        # Soglia minima impostata a 19 estrazioni come richiesto
-        if len(archivio) >= 19:
-            prog_bar = st.empty()
-            modello_ottimizzato = addestra_modello_genetico(archivio, pop_size, max_gen, target_n, prog_bar)
-            
-            nome_modello = f"modello_10elotto_N{target_n}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            salvataggio = {
-                "target_n": target_n,
-                "regola": modello_ottimizzato.to_dict()
-            }
-            with open(nome_modello, "w") as f:
-                json.dump(salvataggio, f, indent=4)
-            st.success(f"Modello addestrato e salvato in '{nome_modello}'!")
-        else:
-            st.error(f"Servono almeno 19 estrazioni in archivio per l'addestramento (attualmente ce ne sono {len(archivio)}).")
-
-elif menu == "Previsione & Verifica":
-    st.subheader("🎯 Previsione Dinamica 10eLotto")
-    
-    file_modelli = [f for f in os.listdir(".") if f.startswith("modello_10elotto") and f.endswith(".json")]
-    
-    if not file_modelli:
-        st.warning("Nessun modello addestrato trovato. Vai su 'Addestra Nuovo Modello' per crearne uno.")
+if st.button("Carica e Addestra Ora", type="primary"):
+    if not storico_text.strip():
+        st.warning("Inserisci prima lo storico dei numeri.")
     else:
-        modello_scelto = st.selectbox("Seleziona Modello", file_modelli)
-        if modello_scelto:
-            with open(modello_scelto, "r") as f:
-                data_mod = json.load(f)
-                target_n = data_mod["target_n"]
-                regola = CromosomaRegola10eLotto.from_dict(data_mod["regola"])
+        try:
+            numeri = [int(n.strip()) for n in storico_text.replace("\n", ",").split(",") if n.strip().isdigit()]
+            numeri = [n for n in numeri if 1 <= n <= 90]
             
-            st.info(f"Modello caricato correttamente. Genera previsioni per {target_n} numeri.")
-            
-            if len(archivio) > 0:
-                ultima = archivio[-1]
-                st.write(f"Ultima estrazione in archivio (Concorso #{ultima.get('id', 'N/D')}) - Base: `{ultima.get('base', [])}`")
-                
-                if st.button("Genera Previsione Corrente", type="primary"):
-                    innescato = regola.check_innesco(archivio)
-                    if innescato:
-                        prev = regola.genera_output(ultima, target_n)
-                        st.success(f"🔥 INNESCO ATTIVO! Gioca questi {target_n} numeri:")
-                        st.markdown(f"### `{' - '.join(f'{x:02d}' for x in prev)}`")
-                        with open(NOME_FILE_ULTIMA_GIOCATA, "w") as f:
-                            json.dump(prev, f)
-                    else:
-                        st.warning("⏳ Nessun innesco attivo in questa estrazione. Attendi la successiva.")
+            if len(numeri) < 4:
+                st.error("Inserisci almeno 4 numeri validi (1-90) nello storico.")
             else:
-                st.warning("Archivio vuoto. Sincronizza dalla sezione Archivio.")
+                X_list, Y_list = [], []
+                for i in range(len(numeri) - 3):
+                    seq = numeri[i:i+3]
+                    target = numeri[i+3]
+                    
+                    x_onehot = np.zeros(270)
+                    for idx, num in enumerate(seq):
+                        if 1 <= num <= 90:
+                            x_onehot[idx * 90 + (num - 1)] = 1.0
+                    X_list.append(x_onehot)
+                    
+                    y_onehot = np.zeros(90)
+                    if 1 <= target <= 90:
+                        y_onehot[target - 1] = 1.0
+                    Y_list.append(y_onehot)
+                
+                X = np.array(X_list)
+                Y = np.array(Y_list)
+                
+                with st.spinner("Addestramento della rete neurale in corso..."):
+                    loss = st.session_state.nn.train_fast(X, Y, epochs=60, lr=0.001)
+                
+                st.session_state.trained = True
+                st.success(f"Addestramento completato! Loss: {loss:.4f}")
+        except Exception as e:
+            st.error(f"Errore nella lettura dello storico: {e}")
 
-elif menu == "Gestione Archivio":
-    st.subheader("📁 Gestione Storico Estrazioni")
-    if st.button("Sincronizza Estrazioni da Lottologia"):
-        with st.spinner("Scaricamento archivio esteso..."):
-            estraz = scarica_estrazioni_con_bypass()
-            if estraz:
-                esistenti = {e['id']: e for e in archivio}
-                for ext in estraz:
-                    esistenti[ext['id']] = ext
-                archivio = list(esistenti.values())
-                archivio.sort(key=lambda x: x['id'])
-                salva_archivio(archivio)
-                st.success(f"Archivio aggiornato! Concorsi totali salvati: {len(archivio)}")
+st.markdown("---")
+st.subheader("2. Genera Previsione")
+ultimi_input = st.text_input("Inserisci gli ultimi 3 numeri estratti (es. 12, 45, 89):")
+
+if st.button("Genera Previsione Corrente"):
+    if not st.session_state.trained:
+        st.warning("Prima devi caricare lo storico e cliccare su 'Carica e Addestra Ora'!")
+    else:
+        try:
+            ultimi = [int(n.strip()) for n in ultimi_input.replace(" ", ",").split(",") if n.strip().isdigit()]
+            if len(ultimi) < 3:
+                st.warning("Inserisci almeno 3 numeri per effettuare la previsione.")
             else:
-                st.error("Errore durante lo scaricamento.")
+                last_3 = ultimi[-3:]
+                top_k = st.session_state.nn.predict_top_k(last_3, k=target_count)
                 
-    if archivio:
-        st.write(f"Concorsi totali in archivio: {len(archivio)}")
-        for ext in reversed(archivio[-5:]):
-            st.text(f"Concorso #{ext.get('id')} - Base: {ext.get('base', [])}")
+                # Formattazione richiesta: stringa di numeri senza spazi dopo la virgola e virgola finale
+                risultato_str = ",".join(map(str, top_k)) + ","
+                
+                st.markdown("### Risultato:")
+                st.code(risultato_str, language="")
+        except Exception as e:
+            st.error(f"Errore durante la previsione: {e}")
