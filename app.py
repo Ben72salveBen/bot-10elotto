@@ -10,8 +10,8 @@ import streamlit as st
 # CONFIGURAZIONE PAGINA
 # ==========================================
 st.set_page_config(
-    page_title="10eLotto Neural Bot - 19 Estrazioni",
-    page_icon="🤖",
+    page_title="10eLotto Neural & Ciclometry Bot",
+    page_icon="🧬",
     layout="centered"
 )
 
@@ -27,7 +27,6 @@ def carica_archivio():
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                # Filtriamo solo le estrazioni con esattamente 20 numeri validi
                 archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
                 return archivio_ordinato
         except Exception as e:
@@ -50,14 +49,45 @@ def salva_giocata(numeri_scelti):
     except Exception:
         pass
 
-def carica_giocata():
-    if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
-        try:
-            with open(NOME_FILE_ULTIMA_GIOCATA, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
-    return None
+# ==========================================
+# MODULO CICLOMETRIA (Distanze e Diametrali)
+# ==========================================
+def distanza_ciclometrica(a, b):
+    """Calcola la distanza circolare tra due numeri su ruota/quadro da 1 a 90."""
+    diff = abs(a - b)
+    return min(diff, 90 - diff)
+
+def get_diametrale(n):
+    """Calcola il numero diametrale (distanza 45 sul cerchio di 90)."""
+    diam = (n + 45) % 90
+    return 90 if diam == 0 else diam
+
+def analizza_ciclometria(ultimi_numeri):
+    """Analizza l'ultima estrazione ricavando numeri guida basati su diametrali e distanze tipiche (es. 15, 30, 45)."""
+    candidati_ciclometrici = set()
+    
+    # 1. Troviamo i diametrali dei numeri usciti
+    for n in ultimi_numeri:
+        diam = get_diametrale(n)
+        candidati_ciclometrici.add(diam)
+        
+    # 2. Analizziamo le distanze armoniche tra coppie nell'estrazione
+    for i in range(len(ultimi_numeri)):
+        for j in range(i + 1, len(ultimi_numeri)):
+            n1 = ultimi_numeri[i]
+            n2 = ultimi_numeri[j]
+            dist = distanza_ciclometrica(n1, n2)
+            
+            # Se la distanza è particolarmente armonica (es. 15, 30, 45), generiamo il complemento geometrico
+            if dist in [15, 30, 45]:
+                comp1 = (n1 + dist) % 90
+                comp2 = (n2 - dist) % 90
+                if comp1 == 0: comp1 = 90
+                if comp2 == 0: comp2 = 90
+                candidati_ciclometrici.add(comp1)
+                candidati_ciclometrici.add(comp2)
+                
+    return sorted(list(candidati_ciclometrici))
 
 # ==========================================
 # RETE NEURALE MULTI-STRATO (270-64-90) + RMSPROP
@@ -68,13 +98,11 @@ class NeuralNetworkRMSprop:
         self.hidden_size = hidden_size
         self.output_size = output_size
         
-        # Inizializzazione pesi
         self.W1 = np.random.randn(input_size, hidden_size) * np.sqrt(2.0 / input_size)
         self.b1 = np.zeros((1, hidden_size))
         self.W2 = np.random.randn(hidden_size, output_size) * np.sqrt(2.0 / hidden_size)
         self.b2 = np.zeros((1, output_size))
         
-        # Accumulatori RMSprop
         self.v_W1 = np.zeros_like(self.W1)
         self.v_b1 = np.zeros_like(self.b1)
         self.v_W2 = np.zeros_like(self.W2)
@@ -82,7 +110,7 @@ class NeuralNetworkRMSprop:
 
     def forward(self, X):
         z1 = np.dot(X, self.W1) + self.b1
-        a1 = np.maximum(0, z1)  # ReLU
+        a1 = np.maximum(0, z1)
         z2 = np.dot(a1, self.W2) + self.b2
         
         exp_z = np.exp(z2 - np.max(z2, axis=1, keepdims=True))
@@ -94,14 +122,11 @@ class NeuralNetworkRMSprop:
             return 0.0
         
         m = X.shape[0]
-        
         for _ in range(epochs):
             z1, a1, probs = self.forward(X)
-            
             dz2 = probs - Y
             dW2 = np.dot(a1.T, dz2) / m
             db2 = np.sum(dz2, axis=0, keepdims=True) / m
-            
             da1 = np.dot(dz2, self.W2.T)
             dz1 = da1 * (z1 > 0)
             dW1 = np.dot(X.T, dz1) / m
@@ -136,11 +161,10 @@ class NeuralNetworkRMSprop:
         return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# FUNZIONE DI ESTRAZIONE DATI (DAL TUO CODICE)
+# SCRAPING DATI LOTTOLOGIA
 # ==========================================
 def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
-    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -220,32 +244,7 @@ def scarica_estrazioni_con_bypass():
         return []
 
 # ==========================================
-# VERIFICA ESITO ULTIMA GIOCATA
-# ==========================================
-def verifica_esito_ultima_giocata(ultima_estrazione):
-    ultima_giocata = carica_giocata()
-    if not ultima_giocata:
-        return
-
-    st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
-    set_estratto = set(ultima_estrazione)
-    set_giocati = set(ultima_giocata)
-    
-    presi = set_giocati.intersection(set_estratto)
-    punti = len(presi)
-    
-    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
-    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
-    
-    if punti >= 2:
-        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
-        st.balloons()
-    else:
-        st.info(f"ℹ️ Risultato: {punti} punti.")
-    st.markdown("---")
-
-# ==========================================
-# ELABORAZIONE PREVISIONE CON 19 ESTRAZIONI
+# ELABORAZIONE CONVERGENZA NEURALE + CICLOMETRIA
 # ==========================================
 if 'nn' not in st.session_state:
     st.session_state.nn = NeuralNetworkRMSprop()
@@ -257,9 +256,9 @@ def elabora_previsione(quantita_numeri):
         st.warning("Servono almeno 5 estrazioni in archivio per generare una previsione.")
         return
 
-    # Seleziona esattamente le ultime 19 estrazioni più recenti
+    # Ultime 19 estrazioni per la rete neurale
     ultime_19 = archivio[-19:]
-    st.info(f"Addestramento rete neurale in corso sulle ultime {len(ultime_19)} estrazioni...")
+    st.info(f"Addestramento rete neurale RMSprop sulle ultime {len(ultime_19)} estrazioni...")
 
     sequenza_numeri = []
     for ext in ultime_19:
@@ -284,29 +283,39 @@ def elabora_previsione(quantita_numeri):
     X = np.array(X_list)
     Y = np.array(Y_list)
     
-    # Addestramento rapido RMSprop
     loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
     
-    # Previsione basata sugli ultimi 3 numeri dell'ultima estrazione
+    # Previsione Neurona pura
     ultima_estrazione = archivio[-1]
     last_3 = ultima_estrazione[-3:]
+    top_neurale = st.session_state.nn.predict_top_k(last_3, k=15) # peschiamo un pool ampio
     
-    top_k = st.session_state.nn.predict_top_k(last_3, k=quantita_numeri)
-    salva_giocata(top_k)
+    # Analisi Ciclometrica sull'ultima estrazione
+    candidati_ciclometria = analizza_ciclometria(ultima_estrazione)
+    
+    # Convergenza: cerchiamo i numeri consigliati SIA dalla rete neurale SIA dalla ciclometria
+    convergenze = [n for n in top_neurale if n in candidati_ciclometria]
+    
+    # Se le convergenze sono inferiori alla quantità richiesta, integriamo con i migliori della neurale
+    pool_finale = convergenze + [n for n in top_neurale if n not in convergenze]
+    risultato_finale = sorted(pool_finale[:quantita_numeri])
+    
+    salva_giocata(risultato_finale)
 
     # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
-    risultato_str = ",".join(map(str, top_k)) + ","
+    risultato_str = ",".join(map(str, risultato_finale)) + ","
 
-    st.markdown(f"### 🤖 PREVISIONE NEURALE ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🧬 PREVISIONE CONVERGENZA (IA + CICLOMETRIA):")
     st.code(risultato_str, language="")
     
-    st.info(f"📌 **Loss finale addestramento (ultime 19 estrazioni):** {loss:.4f}")
+    st.write(f"• **Numeri da Convergenza Armonica:** {convergenze if convergenze else 'Nessuna diretta, usati pesi IA.'}")
+    st.info(f"📌 **Loss finale addestramento:** {loss:.4f}")
 
 # ==========================================
 # INTERFACCIA STREAMLIT
 # ==========================================
-st.title("🤖 10eLotto Neural Bot (19 Estrazioni)")
-st.write("Rete Neurale One-Hot RMSprop addestrata dinamicamente sulle ultime 19 estrazioni online.")
+st.title("🤖 10eLotto Bot - IA & Ciclometria")
+st.write("Integrazione tra Rete Neurale RMSprop (19 estrazioni) e Analisi Ciclometrica (Distanze e Diametrali).")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -318,10 +327,10 @@ st.sidebar.subheader("Menu Operazioni")
 
 opzione = st.sidebar.radio(
     "Scegli un'azione:",
-    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
+    ("Scarica Web & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
 )
 
-if opzione == "Scarica Web, Verifica & Previsione":
+if opzione == "Scarica Web & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
         with st.spinner("Scraping estrazioni in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
@@ -331,22 +340,20 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 nuove_aggiunte = 0
                 for ext in estrazioni:
                     chiave = tuple(ext)
-                    if chiave not in set_esistenti:
+                    if chiave non in set_esistenti:
                         archivio.append(ext)
                         set_esistenti.add(chiave)
                         nuove_aggiunte += 1
                 
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
-                
-                verifica_esito_ultima_giocata(archivio[-1])
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
 
 elif opzione == "Genera Solamente Previsione":
     if st.button("Genera Previsione da Archivio Locale", type="primary"):
-        with st.spinner("Elaborazione previsione in corso..."):
+        with st.spinner("Elaborazione convergenza in corso..."):
             elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
@@ -359,8 +366,8 @@ elif opzione == "Visualizza Archivio":
             st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
 
 elif opzione == "Svuota Archivio":
-    if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
+    if st.button("Conferma Cancellazione Archivio", type="secondary"):
         salva_archivio([])
         if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
             os.remove(NOME_FILE_ULTIMA_GIOCATA)
-        st.success("Archivio e ultime giocate cancellate con successo.")
+        st.success("Archivio svuotato con successo.")
