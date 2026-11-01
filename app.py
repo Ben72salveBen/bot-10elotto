@@ -21,8 +21,26 @@ CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
 
-NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto_genetico.json")
-NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata_gen.json")
+# Utilizziamo lo stesso file di archivio unificato dei bot precedenti
+NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
+NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata.json")
+
+def carica_archivio():
+    if os.path.exists(NOME_FILE_ARCHIVIO):
+        try:
+            with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def salva_archivio(archivio):
+    try:
+        with open(NOME_FILE_ARCHIVIO, "w", encoding="utf-8") as f:
+            json.dump(archivio, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception:
+        return False
 
 # ==========================================
 # UTILITY GEOMETRICHE GRIGLIA 10x9 (1-90)
@@ -34,7 +52,6 @@ def get_decina(numero):
     return (numero - 1) // 10
 
 def get_vicini_griglia(numero, raggio=1):
-    """Restituisce i numeri vicini sulla griglia 10x9 (distanza geometrica)"""
     if not (1 <= numero <= 90):
         return []
     
@@ -80,44 +97,44 @@ class CromosomaRegola10eLotto:
         ])
 
     def check_innesco(self, history_draws):
-        """history_draws è una lista di estrazioni (ciascuna è un set/lista di numeri usciti)"""
+        """history_draws è la lista di dizionari dell'archivio unificato"""
         if len(history_draws) < 15:
             return False
 
-        ultima_estrazione = history_draws[-1]
-        campione_riferimento = list(ultima_estrazione)[:5] # Prendiamo un sottoinsieme guida
-        if not campione_riferimento:
+        ultima_estrazione = history_draws[-1].get('base', [])
+        if not ultima_estrazione:
             return False
-        riferimento = campione_riferimento[0]
+        riferimento = ultima_estrazione[0]
         
         esiti = []
 
         if self.usa_innesco_cadenza:
             cad_rif = get_cadenza(riferimento)
             sub_finestra = history_draws[-self.window_cad:-1]
-            freq = sum(1 for est in sub_finestra for n in est if get_cadenza(n) == cad_rif)
+            freq = sum(1 for ext in sub_finestra for n in ext.get('base', []) if get_cadenza(n) == cad_rif)
             esiti.append(freq >= self.min_freq_cad)
 
         if self.usa_innesco_decina:
             dec_rif = get_decina(riferimento)
             sub_finestra = history_draws[-self.window_decina:-1]
-            tot_numeri = sum(len(est) for est in sub_finestra)
-            presenze = sum(1 for est in sub_finestra for n in est if get_decina(n) == dec_rif)
+            tot_numeri = sum(len(ext.get('base', [])) for ext in sub_finestra)
+            presenze = sum(1 for ext in sub_finestra for n in ext.get('base', []) if get_decina(n) == dec_rif)
             pct = (presenze / tot_numeri) * 100.0 if tot_numeri > 0 else 0
             esiti.append(pct >= self.min_densita_decina)
 
         if self.usa_innesco_ritardo:
             sub_finestra = history_draws[-self.max_ritardo_rientro-1:-1]
-            presente_recente = any(riferimento in est for est in sub_finestra)
+            presente_recente = any(riferimento in ext.get('base', []) for ext in sub_finestra)
             esiti.append(presente_recente)
 
         return all(esiti) if esiti else False
 
-    def genera_output(self, ultima_estrazione, target_n):
-        if not ultima_estrazione:
+    def genera_output(self, ultima_estrazione_obj, target_n):
+        base = ultima_estrazione_obj.get('base', [])
+        if not base:
             return list(range(1, target_n + 1))
             
-        ultimo_num = list(ultima_estrazione)[0]
+        ultimo_num = base[0]
         numeri = []
 
         if self.tipo_output == "EXPAND_CADENZA":
@@ -133,7 +150,6 @@ class CromosomaRegola10eLotto:
             vicini = get_vicini_griglia(ultimo_num, raggio=1)
             numeri = list(dict.fromkeys(cad_nums + vicini))
 
-        # Riempimento fino a target_n con vicini incrementali sulla griglia
         raggio = 1
         while len(numeri) < target_n and raggio <= 5:
             extra = get_vicini_griglia(ultimo_num, raggio)
@@ -142,7 +158,6 @@ class CromosomaRegola10eLotto:
                     numeri.append(e)
             raggio += 1
 
-        # Fallback se mancano numeri
         for n in range(1, 91):
             if len(numeri) >= target_n:
                 break
@@ -211,12 +226,12 @@ def eval_cromosoma(cro, history_draws, target_n):
             ultima = sub_history[-1]
             previsione = set(cro.genera_output(ultima, target_n))
             
-            estrazione_successiva = history_draws[i+1]
+            estrazione_successiva = history_draws[i+1].get('base', [])
             intersezione = previsione.intersection(estrazione_successiva)
             punti = len(intersezione)
             punti_totali_realizzati += punti
             
-            if punti >= 2:  # Consideriamo vincita dal 2 in su nel 10eLotto
+            if punti >= 2:
                 vincite += 1
 
     if inneschi_totali == 0:
@@ -256,7 +271,7 @@ def addestra_modello_genetico(history_draws, pop_size, max_gen, target_n, progre
             if progress_bar:
                 progress_bar.progress(gen / max_gen, text=f"Generazione {gen}/{max_gen} - Miglior Fitness: {miglior_fitness:.1f}")
 
-            nuova_pop = [pop_valutata[0][3]] # Elitismo
+            nuova_pop = [pop_valutata[0][3]]
             while len(nuova_pop) < pop_size:
                 cand1, cand2, cand3 = random.sample(popolazione, 3)
                 f1 = risultati[popolazione.index(cand1)][0]
@@ -275,9 +290,33 @@ def addestra_modello_genetico(history_draws, pop_size, max_gen, target_n, progre
 # ==========================================
 # SCRAPING E GESTIONE ARCHIVIO 10eLotto
 # ==========================================
-def scarica_estrazioni_10elotto():
+def estrai_numeri_da_testo(testo, limite):
+    pezzi = re.findall(r'\d+', testo)
+    numeri_validi = []
+    visti = set()
+    for p in pezzi:
+        if len(p) > 2 and len(p) % 2 == 0:
+            for j in range(0, len(p), 2):
+                sub = int(p[j:j+2])
+                if 1 <= sub <= 90 and sub not in visti:
+                    visti.add(sub)
+                    numeri_validi.append(sub)
+        else:
+            val = int(p)
+            if 1 <= val <= 90 and val not in visti:
+                visti.add(val)
+                numeri_validi.append(val)
+        if len(numeri_validi) == limite:
+            break
+    return numeri_validi
+
+def scarica_estrazioni_con_bypass():
     url = "https://lottologia.com/10elotto5minuti/estrazioni"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://lottologia.com/'
+    }
     req = urllib.request.Request(url, headers=headers)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -286,43 +325,58 @@ def scarica_estrazioni_10elotto():
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
             html = response.read().decode('utf-8', 'ignore')
-            estrazioni = []
+            if "Domande Frequenti" in html:
+                html = html.split("Domande Frequenti")[0]
+            if "Seleziona Numeri" in html:
+                html = html.split("Seleziona Numeri")[-1]
+            
+            estrazioni_trovate = []
             blocchi = re.split(r'#(\d+)', html)
+            
             for i in range(1, len(blocchi), 2):
+                id_concorso = int(blocchi[i])
                 testo_blocco = blocchi[i+1]
-                pezzi = re.findall(r'\d+', testo_blocco)
-                nums = [int(p) for p in pezzi if 1 <= int(p) <= 90]
-                # Estraiamo i primi 20 numeri base validi
-                base_nums = []
-                visti = set()
-                for n in nums:
-                    if n not in visti:
-                        visti.add(n)
-                        base_nums.append(n)
-                    if len(base_nums) == 20:
-                        break
-                if len(base_nums) == 20:
-                    estrazioni.append(set(base_nums))
-            return estrazioni
-    except Exception:
+                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
+                    continue
+                
+                match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
+                numeri_base = []
+                if match_num:
+                    numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
+                if len(numeri_base) < 20:
+                    numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
+
+                match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
+                numeri_extra = []
+                if match_extra:
+                    numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
+
+                if len(numeri_base) == 20:
+                    tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
+                    estrazioni_trovate.append({
+                        'id': id_concorso,
+                        'base': sorted(numeri_base),
+                        'extra': sorted(numeri_extra),
+                        'tutti': tutti_35
+                    })
+
+            if not estrazioni_trovate:
+                return []
+            estrazioni_trovate.sort(key=lambda x: x['id'])
+            return estrazioni_trovate
+    except Exception as e:
+        st.error(f"Errore di connessione: {e}")
         return []
 
 # ==========================================
 # INTERFACCIA STREAMLIT
 # ==========================================
-st.title("🧬 Bot 10eLotto - Algoritmo Genetico Multi-Core")
-st.write("Sistema di intelligenza artificiale evolutiva ottimizzato per il 10eLotto (griglia 10x9).")
+st.title("🧬 Bot 10eLotto Genetico - Multi-Core")
+st.write("Sistema di intelligenza artificiale evolutiva integrato con l'archivio unificato dei bot precedenti.")
 
 menu = st.sidebar.selectbox("Menu", ["Previsione & Verifica", "Addestra Nuovo Modello", "Gestione Archivio"])
 
-archivio = []
-if os.path.exists(NOME_FILE_ARCHIVIO):
-    try:
-        with open(NOME_FILE_ARCHIVIO, "r") as f:
-            data_arch = json.load(f)
-            archivio = [set(x) for x in data_arch]
-    except Exception:
-        archivio = []
+archivio = carica_archivio()
 
 if menu == "Addestra Nuovo Modello":
     st.subheader("🏋️ Addestramento Modello Genetico")
@@ -332,12 +386,11 @@ if menu == "Addestra Nuovo Modello":
     
     if st.button("Avvia Sincronizzazione Web & Addestramento", type="primary"):
         with st.spinner("Scaricamento estrazioni in corso..."):
-            estrazioni_web = scarica_estrazioni_10elotto()
-            if len(estrazioni_web) > 20:
+            estrazioni_web = scarica_estrazioni_con_bypass()
+            if len(estrazioni_web) > 10:
                 archivio = estrazioni_web
-                with open(NOME_FILE_ARCHIVIO, "w") as f:
-                    json.dump([list(x) for x in archivio], f)
-                st.success(f"Scaricate {len(archivio)} estrazioni!")
+                salva_archivio(archivio)
+                st.success(f"Scaricate e salvate {len(archivio)} estrazioni in archivio_lotto.json!")
             else:
                 st.warning("Impossibile scaricare dal web. Verifico archivio locale...")
                 
@@ -359,7 +412,6 @@ if menu == "Addestra Nuovo Modello":
 elif menu == "Previsione & Verifica":
     st.subheader("🎯 Previsione Dinamica 10eLotto")
     
-    # Cerca file di modelli salvati nella cartella corrente
     file_modelli = [f for f in os.listdir(".") if f.startswith("modello_10elotto") and f.endswith(".json")]
     
     if not file_modelli:
@@ -376,7 +428,7 @@ elif menu == "Previsione & Verifica":
             
             if len(archivio) > 0:
                 ultima = archivio[-1]
-                st.write(f"Ultima estrazione in archivio ({len(ultima)} numeri): `{sorted(list(ultima))}`")
+                st.write(f"Ultima estrazione in archivio (Concorso #{ultima.get('id', 'N/D')}) - Base: `{ultima.get('base', [])}`")
                 
                 if st.button("Genera Previsione Corrente", type="primary"):
                     innescato = regola.check_innesco(archivio)
@@ -395,15 +447,14 @@ elif menu == "Gestione Archivio":
     st.subheader("📁 Gestione Storico Estrazioni")
     if st.button("Sincronizza Estrazioni da Lottologia"):
         with st.spinner("Scaricamento..."):
-            estraz = scarica_estrazioni_10elotto()
+            estraz = scarica_estrazioni_con_bypass()
             if estraz:
-                with open(NOME_FILE_ARCHIVIO, "w") as f:
-                    json.dump([list(x) for x in estraz], f)
-                st.success(f"Archivio aggiornato con {len(estraz)} concorsi!")
+                salva_archivio(estraz)
+                st.success(f"Archivio aggiornato con {len(estraz)} concorsi in archivio_lotto.json!")
             else:
                 st.error("Errore durante lo scaricamento.")
                 
-    if os.path.exists(NOME_FILE_ARCHIVIO):
-        with open(NOME_FILE_ARCHIVIO, "r") as f:
-            data_arch = json.load(f)
-            st.write(f"Concorsi totali in archivio: {len(data_arch)}")
+    if archivio:
+        st.write(f"Concorsi totali in archivio: {len(archivio)}")
+        for ext in reversed(archivio[-5:]):
+            st.text(f"Concorso #{ext.get('id')} - Base: {ext.get('base', [])}")
