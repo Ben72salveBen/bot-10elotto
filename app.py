@@ -27,7 +27,17 @@ def carica_archivio():
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
+                archivio_ordinato = []
+                for ext in archivio:
+                    # Supporta sia dizionari salvati che liste dirette di numeri
+                    if isinstance(ext, dict) and 'numeri' in ext:
+                        nums = [int(n) for n in ext['numeri'] if 1 <= int(n) <= 90]
+                        if len(nums) == 20:
+                            archivio_ordinato.append(sorted(nums))
+                    elif isinstance(ext, list):
+                        nums = [int(n) for n in ext if 1 <= int(n) <= 90]
+                        if len(nums) == 20:
+                            archivio_ordinato.append(sorted(nums))
                 return archivio_ordinato
         except Exception as e:
             st.error(f"Errore nella lettura dell'archivio: {e}")
@@ -59,7 +69,7 @@ def carica_giocata():
     return None
 
 # ==========================================
-# MODULO CICLOMETRIA ARMONICA (ROBUSTO)
+# MODULO CICLOMETRIA ARMONICA (SICURO)
 # ==========================================
 def distanza_ciclometrica(a, b):
     diff = abs(a - b)
@@ -70,20 +80,19 @@ def get_diametrale(n):
     return 90 if diam == 0 else diam
 
 def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
-    """Calcola i candidati ciclometrici in modo sicuro ed evita qualsiasi errore di pool vuoto."""
     candidati = []
     
-    # 1. Aggiungiamo i diametrali dei numeri usciti
+    # 1. Ricerca dei diametrali
     for n in ultimi_numeri:
-        diam = get_diametrale(n)
+        diam = get_diametrale(int(n))
         if diam not in candidati:
             candidati.append(diam)
         
-    # 2. Analizziamo le distanze armoniche (15, 30, 45)
+    # 2. Analisi delle distanze armoniche (15, 30, 45)
     for i in range(len(ultimi_numeri)):
         for j in range(i + 1, len(ultimi_numeri)):
-            n1 = ultimi_numeri[i]
-            n2 = ultimi_numeri[j]
+            n1 = int(ultimi_numeri[i])
+            n2 = int(ultimi_numeri[j])
             dist = distanza_ciclometrica(n1, n2)
             
             if dist in [15, 30, 45]:
@@ -95,18 +104,18 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
                 if comp1 not in candidati: candidati.append(comp1)
                 if comp2 not in candidati: candidati.append(comp2)
                 
-    # 3. Riempimento di sicurezza: se non raggiungiamo la quantità richiesta, peschiamo dal cerchio dei 90
+    # 3. Riempimento di sicurezza con i numeri dell'estrazione e cerchio 1-90
     for n in ultimi_numeri:
+        val = int(n)
+        if val not in candidati:
+            candidati.append(val)
+            
+    for n in range(1, 91):
         if n not in candidati:
             candidati.append(n)
             
-    if len(candidati) < quantita_richiesta:
-        for n in range(1, 91):
-            if n not in candidati:
-                candidati.append(n)
-                
     candidati.sort()
-    return candidati[:quantita_numeri]
+    return candidati[:quantita_richiesta]
 
 # ==========================================
 # FUNZIONE DI ESTRAZIONE DATI
@@ -224,19 +233,15 @@ def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
     if len(archivio) < 1:
-        st.warning("Nessuna estrazione in archivio per generare la previsione ciclometrica.")
+        st.warning("Nessuna estrazione in archivio per generare la previsione ciclometrica. Sincronizza prima dal web.")
         return
 
     st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
     
-    # Preleviamo l'ultima estrazione dell'archivio
     ultima_estrazione = archivio[-1]
-    
-    # Eseguiamo il calcolo geometrico sicuro
     previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
     salva_giocata(previsione)
 
-    # Formattazione stringa senza spazi dopo la virgola e virgola finale
     risultato_str = ",".join(map(str, previsione)) + ","
 
     st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
@@ -280,7 +285,8 @@ if opzione == "Scarica Web, Verifica & Previsione":
                 salva_archivio(archivio)
                 st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                verifica_esito_ultima_giocata(archivio[-1])
+                if len(archivio) > 0:
+                    verifica_esito_ultima_giocata(archivio[-1])
                 elabora_previsione(quantita)
             else:
                 st.error("Nessuna estrazione trovata sul web.")
