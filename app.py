@@ -21,7 +21,6 @@ CARTELLA_DOCUMENTI = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
 
-# Utilizziamo lo stesso file di archivio unificato dei bot precedenti
 NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
 NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata.json")
 
@@ -97,7 +96,6 @@ class CromosomaRegola10eLotto:
         ])
 
     def check_innesco(self, history_draws):
-        """history_draws è la lista di dizionari dell'archivio unificato"""
         if len(history_draws) < 15:
             return False
 
@@ -288,7 +286,7 @@ def addestra_modello_genetico(history_draws, pop_size, max_gen, target_n, progre
     return miglior_regola
 
 # ==========================================
-# SCRAPING E GESTIONE ARCHIVIO 10eLotto
+# SCRAPING ROBUSTO ARCHIVIO 10eLotto (Min 39 token/numeri verificati)
 # ==========================================
 def estrai_numeri_da_testo(testo, limite):
     pezzi = re.findall(r'\d+', testo)
@@ -336,6 +334,12 @@ def scarica_estrazioni_con_bypass():
             for i in range(1, len(blocchi), 2):
                 id_concorso = int(blocchi[i])
                 testo_blocco = blocchi[i+1]
+                
+                # Controllo robusto: verifichiamo che il blocco contenga abbastanza numeri/token estratti (almeno 39 in totale tra base ed extra)
+                tutti_pezzi_grezzi = re.findall(r'\d+', testo_blocco)
+                if len(tutti_pezzi_grezzi) < 30:
+                    continue
+
                 if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
                     continue
                 
@@ -372,7 +376,7 @@ def scarica_estrazioni_con_bypass():
 # INTERFACCIA STREAMLIT
 # ==========================================
 st.title("🧬 Bot 10eLotto Genetico - Multi-Core")
-st.write("Sistema di intelligenza artificiale evolutiva integrato con l'archivio unificato dei bot precedenti.")
+st.write("Sistema evolutivo integrato con l'archivio unificato dei bot precedenti.")
 
 menu = st.sidebar.selectbox("Menu", ["Previsione & Verifica", "Addestra Nuovo Modello", "Gestione Archivio"])
 
@@ -385,14 +389,14 @@ if menu == "Addestra Nuovo Modello":
     target_n = st.slider("Numeri da prevedere (Target)", 2, 10, 4)
     
     if st.button("Avvia Sincronizzazione Web & Addestramento", type="primary"):
-        with st.spinner("Scaricamento estrazioni in corso..."):
+        with st.spinner("Scaricamento e validazione estrazioni in corso..."):
             estrazioni_web = scarica_estrazioni_con_bypass()
             if len(estrazioni_web) > 10:
                 archivio = estrazioni_web
                 salva_archivio(archivio)
-                st.success(f"Scaricate e salvate {len(archivio)} estrazioni in archivio_lotto.json!")
+                st.success(f"Scaricate e salvate {len(archivio)} estrazioni valide in archivio_lotto.json!")
             else:
-                st.warning("Impossibile scaricare dal web. Verifico archivio locale...")
+                st.warning("Impossibile scaricare dal web o dati insufficienti. Verifico archivio locale...")
                 
         if len(archivio) > 25:
             prog_bar = st.empty()
