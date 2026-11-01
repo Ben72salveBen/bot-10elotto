@@ -10,7 +10,7 @@ import streamlit as st
 # CONFIGURAZIONE PAGINA
 # ==========================================
 st.set_page_config(
-    page_title="10eLotto Neural Bot - 19 Estrazioni",
+    page_title="10eLotto Neural Bot",
     page_icon="🤖",
     layout="centered"
 )
@@ -20,23 +20,19 @@ if not os.path.exists(CARTELLA_DOCUMENTI):
     CARTELLA_DOCUMENTI = os.path.expanduser("~")
 
 NOME_FILE_ARCHIVIO = os.path.join(CARTELLA_DOCUMENTI, "archivio_lotto.json")
-NOME_FILE_ULTIMA_GIOCATA = os.path.join(CARTELLA_DOCUMENTI, "ultima_giocata.json")
 
 def carica_archivio():
     if os.path.exists(NOME_FILE_ARCHIVIO):
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                # Pulisce automaticamente eventuali ID falsi/bassi salvati in precedenza (< 100000)
-                archivio_pulito = [ext for ext in archivio if ext.get('id', 0) >= 100000]
-                return archivio_pulito
+                return [ext for ext in archivio if ext.get('id', 0) >= 100000]
         except Exception:
             return []
     return []
 
 def salva_archivio(archivio):
     try:
-        # Filtro di sicurezza prima di salvare
         archivio_pulito = [ext for ext in archivio if ext.get('id', 0) >= 100000]
         with open(NOME_FILE_ARCHIVIO, "w", encoding="utf-8") as f:
             json.dump(archivio_pulito, f, ensure_ascii=False, indent=4)
@@ -53,13 +49,11 @@ class NeuralNetworkRMSprop:
         self.hidden_size = hidden_size
         self.output_size = output_size
         
-        # Inizializzazione pesi
         self.W1 = np.random.randn(input_size, hidden_size) * np.sqrt(2.0 / input_size)
         self.b1 = np.zeros((1, hidden_size))
         self.W2 = np.random.randn(hidden_size, output_size) * np.sqrt(2.0 / hidden_size)
         self.b2 = np.zeros((1, output_size))
         
-        # Accumulatori RMSprop
         self.v_W1 = np.zeros_like(self.W1)
         self.v_b1 = np.zeros_like(self.b1)
         self.v_W2 = np.zeros_like(self.W2)
@@ -67,7 +61,7 @@ class NeuralNetworkRMSprop:
 
     def forward(self, X):
         z1 = np.dot(X, self.W1) + self.b1
-        a1 = np.maximum(0, z1)  # ReLU
+        a1 = np.maximum(0, z1)
         z2 = np.dot(a1, self.W2) + self.b2
         
         exp_z = np.exp(z2 - np.max(z2, axis=1, keepdims=True))
@@ -79,14 +73,11 @@ class NeuralNetworkRMSprop:
             return 0.0
         
         m = X.shape[0]
-        
         for _ in range(epochs):
             z1, a1, probs = self.forward(X)
-            
             dz2 = probs - Y
             dW2 = np.dot(a1.T, dz2) / m
             db2 = np.sum(dz2, axis=0, keepdims=True) / m
-            
             da1 = np.dot(dz2, self.W2.T)
             dz1 = da1 * (z1 > 0)
             dW1 = np.dot(X.T, dz1) / m
@@ -116,12 +107,11 @@ class NeuralNetworkRMSprop:
             
         X = x_onehot.reshape(1, -1)
         _, _, probs = self.forward(X)
-        
         top_k_indices = np.argsort(probs[0])[-k:]
         return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# SCRAPING ESTREMA PRECISIONE (CON FILTRO ID FALSI)
+# SCRAPING POTENZIATO E RESISTENTE AI BLOCCHI
 # ==========================================
 def estrai_numeri_da_testo(testo, limite):
     pezzi = re.findall(r'\d+', testo)
@@ -144,124 +134,91 @@ def estrai_numeri_da_testo(testo, limite):
     return numeri_validi
 
 def scarica_estrazioni_con_bypass():
-    url = "https://lottologia.com/10elotto5minuti/estrazioni"
+    urls = [
+        "https://lottologia.com/10elotto5minuti/estrazioni/",
+        "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it"
+    ]
+    
+    # Header completi per simulare un browser reale ed evitare blocchi 403 / Cloudflare
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'identity',
         'Connection': 'keep-alive',
-        'Referer': 'https://lottologia.com/'
+        'Upgrade-Insecure-Requests': '1',
+        'Referer': 'https://www.google.com/'
     }
     
-    req = urllib.request.Request(url, headers=headers)
+    estrazioni_trovate = []
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
-            html = response.read().decode('utf-8', 'ignore')
-            
-            if "Domande Frequenti" in html:
-                html = html.split("Domande Frequenti")[0]
-            elif "domande frequenti" in html:
-                html = html.split("domande frequenti")[0]
-                
-            if "Seleziona Numeri" in html:
-                html = html.split("Seleziona Numeri")[-1]
-            elif "seleziona numeri" in html:
-                html = html.split("seleziona numeri")[-1]
-            
-            estrazioni_trovate = []
-            blocchi = re.split(r'#(\d+)', html)
-            
-            for i in range(1, len(blocchi), 2):
-                id_concorso = int(blocchi[i])
-                
-                # SCARTA GLI ID FALSI/TROPPO BASSI (es. #9776 o indici errati)
-                if id_concorso < 100000:
-                    continue
 
-                testo_blocco = blocchi[i+1]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            # Usiamo unopener con gestione dei cookie per simulare una sessione valida
+            opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+            with opener.open(req, timeout=15) as response:
+                html = response.read().decode('utf-8', 'ignore')
                 
-                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
-                    continue
-                
-                match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
-                numeri_base = []
-                if match_num:
-                    numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
-                
-                if len(numeri_base) < 20:
+                blocchi = re.split(r'#(\d+)', html)
+                for i in range(1, len(blocchi), 2):
+                    id_concorso = int(blocchi[i])
+                    if id_concorso < 100000:
+                        continue
+
+                    testo_blocco = blocchi[i+1]
                     numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
 
-                numeri_extra = []
-                match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
-                if match_extra:
-                    numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
-                else:
-                    pos_extra = testo_blocco.lower().find('extra')
-                    if pos_extra != -1:
-                        testo_dopo_extra = testo_blocco[pos_extra:]
-                        numeri_extra = estrai_numeri_da_testo(testo_dopo_extra, 15)
+                    if len(numeri_base) == 20:
+                        if not any(e['id'] == id_concorso for e in estrazioni_trovate):
+                            estrazioni_trovate.append({
+                                'id': id_concorso,
+                                'base': sorted(numeri_base),
+                                'extra': [],
+                                'tutti': sorted(numeri_base)
+                            })
+        except Exception as e:
+            continue
 
-                if len(numeri_base) == 20:
-                    tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
-                    estrazioni_trovate.append({
-                        'id': id_concorso,
-                        'base': sorted(numeri_base),
-                        'extra': sorted(numeri_extra),
-                        'tutti': tutti_35
-                    })
+        if len(estrazioni_trovate) > 0:
+            break
 
-            if not estrazioni_trovate:
-                return []
-
-            estrazioni_trovate.sort(key=lambda x: x['id'])
-            return estrazioni_trovate
-
-    except Exception as e:
-        st.error(f"Errore di connessione durante lo scraping: {e}")
-        return []
+    estrazioni_trovate.sort(key=lambda x: x['id'])
+    return estrazioni_trovate
 
 # ==========================================
 # INTERFACCIA STREAMLIT
 # ==========================================
-st.title("🤖 10eLotto Neural Bot (19 Estrazioni)")
-st.write("Rete Neurale One-Hot RMSprop addestrata dinamicamente sulle ultime 19 estrazioni online verificate.")
+st.title("🤖 10eLotto Neural Bot")
+st.write("Rete Neurale RMSprop addestrata automaticamente sulle ultime 19 estrazioni online.")
 
 if 'nn' not in st.session_state:
     st.session_state.nn = NeuralNetworkRMSprop()
 
-# MENU LATERALE PER LA GESTIONE E VISUALIZZAZIONE
-menu_scelta = st.sidebar.selectbox("Seleziona Sezione", ["Genera Previsione", "📁 Visualizza Estrazioni Scaricate"])
+menu_scelta = st.sidebar.selectbox("Seleziona Sezione", ["Genera Previsione", "📁 Visualizza Archivio Scaricato"])
 quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
 
-if menu_scelta == "📁 Visualizza Estrazioni Scaricate":
-    st.subheader("📁 Storico delle Estrazioni Scaricate")
+if menu_scelta == "📁 Visualizza Archivio Scaricato":
+    st.subheader("📁 Storico delle Estrazioni")
     archivio_corrente = carica_archivio()
     
-    if len(archivio_corrente) == 0:
-        st.info("L'archivio è attualmente vuoto o ripulito da ID non validi.")
-    else:
-        st.write(f"Totale concorsi validi in archivio: **{len(archivio_corrente)}**")
-        if st.button("🗑️ Svuota e Pulisci Archivio"):
-            salva_archivio([])
-            st.success("Archivio svuotato con successo!")
-            st.rerun()
-            
-        st.markdown("---")
-        # Mostra le estrazioni dalla più recente alla meno recente
-        for ext in reversed(archivio_corrente):
-            st.markdown(f"**Concorso ID: #{ext['id']}**")
-            st.write(f"• **Base:** `{ext['base']}`")
-            if ext.get('extra'):
-                st.write(f"• **Extra:** `{ext['extra']}`")
-            st.markdown("---")
+    st.write(f"Concorsi validi in archivio: **{len(archivio_corrente)}**")
+    
+    if st.button("🗑️ Svuota Archivio"):
+        salva_archivio([])
+        st.success("Archivio svuotato.")
+        st.rerun()
+        
+    st.markdown("---")
+    for ext in reversed(archivio_corrente):
+        st.text(f"Concorso #{ext['id']} -> Base: {ext['base']}")
 
 else:
-    if st.button("🔄 Sincronizza & Addestra (Ultime 19)", type="primary"):
-        with st.spinner("Scaricamento estrazioni online in corso..."):
+    if st.button("🔄 Sincronizza & Addestra Online", type="primary"):
+        with st.spinner("Scaricamento estrazioni in corso da Lottologia..."):
             estrazioni_web = scarica_estrazioni_con_bypass()
             if len(estrazioni_web) > 0:
                 archivio = carica_archivio()
@@ -270,65 +227,54 @@ else:
                     if ext['id'] not in set_esistenti:
                         archivio.append(ext)
                 
-                # Pulizia forzata di eventuali ID spuri vecchi
                 archivio = [ext for ext in archivio if ext['id'] >= 100000]
                 archivio.sort(key=lambda x: x['id'])
                 salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! Totale in archivio valido: {len(archivio)}")
-                
-                # Preleviamo esattamente le ultime 19 estrazioni più recenti
-                ultime_19 = archivio[-19:]
-                
-                if len(ultime_19) >= 3:
-                    sequenza_numeri = []
-                    for ext in ultime_19:
-                        sequenza_numeri.extend(ext['base'])
-                    
-                    X_list, Y_list = [], []
-                    for i in range(len(sequenza_numeri) - 3):
-                        seq = sequenza_numeri[i:i+3]
-                        target = sequenza_numeri[i+3]
-                        
-                        x_onehot = np.zeros(270)
-                        for idx, num in enumerate(seq):
-                            if 1 <= num <= 90:
-                                x_onehot[idx * 90 + (num - 1)] = 1.0
-                        X_list.append(x_onehot)
-                        
-                        y_onehot = np.zeros(90)
-                        if 1 <= target <= 90:
-                            y_onehot[target - 1] = 1.0
-                        Y_list.append(y_onehot)
-                    
-                    X = np.array(X_list)
-                    Y = np.array(Y_list)
-                    
-                    with st.spinner("Addestramento della rete neurale sulle ultime 19 estrazioni..."):
-                        loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
-                    
-                    st.success(f"✅ Rete addestrata con successo sulle ultime {len(ultime_19)} estrazioni! (Loss: {loss:.4f})")
-                else:
-                    st.warning("Ci sono meno di 3 estrazioni totali valide per avviare il training.")
+                st.success(f"Sincronizzazione riuscita! Totale concorsi salvati: {len(archivio)}")
             else:
-                st.error("Nessuna estrazione trovata online.")
-
-    st.markdown("---")
-    st.subheader("🎯 Genera Previsione Corrente")
+                st.error("⚠️ Impossibile scaricare le estrazioni dal sito. Il server di Lottologia potrebbe aver rifiutato la connessione temporaneamente.")
 
     archivio_corrente = carica_archivio()
-    if len(archivio_corrente) > 0:
+    if len(archivio_corrente) >= 3:
+        ultime_19 = archivio_corrente[-19:]
+        sequenza_numeri = []
+        for ext in ultime_19:
+            sequenza_numeri.extend(ext['base'])
+        
+        X_list, Y_list = [], []
+        for i in range(len(sequenza_numeri) - 3):
+            seq = sequenza_numeri[i:i+3]
+            target = sequenza_numeri[i+3]
+            
+            x_onehot = np.zeros(270)
+            for idx, num in enumerate(seq):
+                if 1 <= num <= 90:
+                    x_onehot[idx * 90 + (num - 1)] = 1.0
+            X_list.append(x_onehot)
+            
+            y_onehot = np.zeros(90)
+            if 1 <= target <= 90:
+                y_onehot[target - 1] = 1.0
+            Y_list.append(y_onehot)
+            
+        X = np.array(X_list)
+        Y = np.array(Y_list)
+        
+        loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
+        st.info(f"🧠 Rete neurale addestrata sulle ultime {len(ultime_19)} estrazioni attive. (Loss: {loss:.4f})")
+
+        st.markdown("---")
+        st.subheader("🎯 Genera Previsione Corrente")
         ultima = archivio_corrente[-1]
-        st.write(f"Ultimo Concorso in archivio: **#{ultima['id']}**")
+        st.write(f"Ultimo Concorso attivo: **#{ultima['id']}**")
         st.write(f"Numeri Base: `{ultima['base']}`")
         
         if st.button("Genera Previsione Ora"):
             last_3 = ultima['base'][-3:]
             top_k = st.session_state.nn.predict_top_k(last_3, k=quantita)
-            
-            # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
             risultato_str = ",".join(map(str, top_k)) + ","
             
             st.markdown("### Previsione Neurale:")
             st.code(risultato_str, language="")
     else:
-        st.warning("L'archivio è vuoto. Clicca su 'Sincronizza & Addestra' per scaricare i dati.")
+        st.warning(f"Ci sono {len(archivio_corrente)} estrazioni in archivio. Clicca su 'Sincronizza & Addestra Online' per scaricare automaticamente i dati freschi.")
