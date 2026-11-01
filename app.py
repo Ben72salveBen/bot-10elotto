@@ -113,12 +113,12 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
     return candidati[:quantita_richiesta]
 
 # ==========================================
-# SCRAPING AGGIORNATO (10elotto5.it)
+# SCRAPING STRUTTURATO (10elotto5.it)
 # ==========================================
 def scarica_estrazioni_con_bypass():
     urls = [
-        "https://www.10elotto5minuti.it/10elotto-5-minuti.php",
-        "https://10elotto5.com/"
+        "https://www.10elotto5minuti.it/10elotto-5-minuti-di-oggi/",
+        "https://www.10elotto5minuti.it/10elotto-5-minuti.php"
     ]
     
     headers = {
@@ -149,15 +149,12 @@ def scarica_estrazioni_con_bypass():
     try:
         estrazioni_trovate = []
         
-        # Estrae tutte le sequenze numeriche presenti nelle tabelle o righe del sito
-        # Cerca righe con sequenze di numeri validi da 1 a 90
+        # Estraiamo le sequenze numeriche filtrando blocchi puliti coerenti con il layout ufficiale
         righe_testo = html.split('\n')
         for riga in righe_testo:
-            # Estrae tutti i numeri interi validi sulla riga
             token_numerici = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', riga)
             if len(token_numerici) >= 20:
                 interi = [int(t) for t in token_numerici]
-                # Prende esattamente i primi 20 numeri validi univoci o in sequenza pulita
                 finestra = []
                 visti = set()
                 for n in interi:
