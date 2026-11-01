@@ -53,32 +53,26 @@ def salva_giocata(numeri_scelti):
 # MODULO CICLOMETRIA (Distanze e Diametrali)
 # ==========================================
 def distanza_ciclometrica(a, b):
-    """Calcola la distanza circolare tra due numeri su ruota/quadro da 1 a 90."""
     diff = abs(a - b)
     return min(diff, 90 - diff)
 
 def get_diametrale(n):
-    """Calcola il numero diametrale (distanza 45 sul cerchio di 90)."""
     diam = (n + 45) % 90
     return 90 if diam == 0 else diam
 
 def analizza_ciclometria(ultimi_numeri):
-    """Analizza l'ultima estrazione ricavando numeri guida basati su diametrali e distanze tipiche (es. 15, 30, 45)."""
     candidati_ciclometrici = set()
     
-    # 1. Troviamo i diametrali dei numeri usciti
     for n in ultimi_numeri:
         diam = get_diametrale(n)
         candidati_ciclometrici.add(diam)
         
-    # 2. Analizziamo le distanze armoniche tra coppie nell'estrazione
     for i in range(len(ultimi_numeri)):
         for j in range(i + 1, len(ultimi_numeri)):
             n1 = ultimi_numeri[i]
             n2 = ultimi_numeri[j]
             dist = distanza_ciclometrica(n1, n2)
             
-            # Se la distanza è particolarmente armonica (es. 15, 30, 45), generiamo il complemento geometrico
             if dist in [15, 30, 45]:
                 comp1 = (n1 + dist) % 90
                 comp2 = (n2 - dist) % 90
@@ -240,134 +234,4 @@ def scarica_estrazioni_con_bypass():
             return [item['numeri'] for item in estrazioni_trovate]
 
     except Exception as e:
-        st.error(f"Errore di connessione durante lo scraping: {e}")
-        return []
-
-# ==========================================
-# ELABORAZIONE CONVERGENZA NEURALE + CICLOMETRIA
-# ==========================================
-if 'nn' not in st.session_state:
-    st.session_state.nn = NeuralNetworkRMSprop()
-
-def elabora_previsione(quantita_numeri):
-    archivio = carica_archivio()
-    
-    if len(archivio) < 5:
-        st.warning("Servono almeno 5 estrazioni in archivio per generare una previsione.")
-        return
-
-    # Ultime 19 estrazioni per la rete neurale
-    ultime_19 = archivio[-19:]
-    st.info(f"Addestramento rete neurale RMSprop sulle ultime {len(ultime_19)} estrazioni...")
-
-    sequenza_numeri = []
-    for ext in ultime_19:
-        sequenza_numeri.extend(ext)
-        
-    X_list, Y_list = [], []
-    for i in range(len(sequenza_numeri) - 3):
-        seq = sequenza_numeri[i:i+3]
-        target = sequenza_numeri[i+3]
-        
-        x_onehot = np.zeros(270)
-        for idx, num in enumerate(seq):
-            if 1 <= num <= 90:
-                x_onehot[idx * 90 + (num - 1)] = 1.0
-        X_list.append(x_onehot)
-        
-        y_onehot = np.zeros(90)
-        if 1 <= target <= 90:
-            y_onehot[target - 1] = 1.0
-        Y_list.append(y_onehot)
-        
-    X = np.array(X_list)
-    Y = np.array(Y_list)
-    
-    loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
-    
-    # Previsione Neurona pura
-    ultima_estrazione = archivio[-1]
-    last_3 = ultima_estrazione[-3:]
-    top_neurale = st.session_state.nn.predict_top_k(last_3, k=15) # peschiamo un pool ampio
-    
-    # Analisi Ciclometrica sull'ultima estrazione
-    candidati_ciclometria = analizza_ciclometria(ultima_estrazione)
-    
-    # Convergenza: cerchiamo i numeri consigliati SIA dalla rete neurale SIA dalla ciclometria
-    convergenze = [n for n in top_neurale if n in candidati_ciclometria]
-    
-    # Se le convergenze sono inferiori alla quantità richiesta, integriamo con i migliori della neurale
-    pool_finale = convergenze + [n for n in top_neurale if n not in convergenze]
-    risultato_finale = sorted(pool_finale[:quantita_numeri])
-    
-    salva_giocata(risultato_finale)
-
-    # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
-    risultato_str = ",".join(map(str, risultato_finale)) + ","
-
-    st.markdown(f"### 🧬 PREVISIONE CONVERGENZA (IA + CICLOMETRIA):")
-    st.code(risultato_str, language="")
-    
-    st.write(f"• **Numeri da Convergenza Armonica:** {convergenze if convergenze else 'Nessuna diretta, usati pesi IA.'}")
-    st.info(f"📌 **Loss finale addestramento:** {loss:.4f}")
-
-# ==========================================
-# INTERFACCIA STREAMLIT
-# ==========================================
-st.title("🤖 10eLotto Bot - IA & Ciclometria")
-st.write("Integrazione tra Rete Neurale RMSprop (19 estrazioni) e Analisi Ciclometrica (Distanze e Diametrali).")
-
-archivio_corrente = carica_archivio()
-st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Menu Operazioni")
-
-opzione = st.sidebar.radio(
-    "Scegli un'azione:",
-    ("Scarica Web & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
-)
-
-if opzione == "Scarica Web & Previsione":
-    if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scraping estrazioni in corso..."):
-            estrazioni = scarica_estrazioni_con_bypass()
-            if len(estrazioni) > 0:
-                archivio = carica_archivio()
-                set_esistenti = {tuple(ext) for ext in archivio}
-                nuove_aggiunte = 0
-                for ext in estrazioni:
-                    chiave = tuple(ext)
-                    if chiave non in set_esistenti:
-                        archivio.append(ext)
-                        set_esistenti.add(chiave)
-                        nuove_aggiunte += 1
-                
-                salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
-                elabora_previsione(quantita)
-            else:
-                st.error("Nessuna estrazione trovata sul web.")
-
-elif opzione == "Genera Solamente Previsione":
-    if st.button("Genera Previsione da Archivio Locale", type="primary"):
-        with st.spinner("Elaborazione convergenza in corso..."):
-            elabora_previsione(quantita)
-
-elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni")
-    archivio = carica_archivio()
-    if len(archivio) == 0:
-        st.info("Archivio vuoto.")
-    else:
-        for idx, ext in enumerate(reversed(archivio)):
-            st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
-
-elif opzione == "Svuota Archivio":
-    if st.button("Conferma Cancellazione Archivio", type="secondary"):
-        salva_archivio([])
-        if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
-            os.remove(NOME_FILE_ULTIMA_GIOCATA)
-        st.success("Archivio svuotato con successo.")
+        st.error(f"Errore di connessione durante lo scraping:
