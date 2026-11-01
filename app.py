@@ -123,7 +123,7 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
     return candidati[:quantita_richiesta]
 
 # ==========================================
-# SCRAPING STRUTTURATO
+# SCRAPING ROBUSTO E PULITO
 # ==========================================
 def scarica_estrazioni_con_bypass():
     urls = [
@@ -158,36 +158,44 @@ def scarica_estrazioni_con_bypass():
 
     try:
         estrazioni_trovate = []
-        righe_testo = html.split('\n')
         
-        for riga in righe_testo:
-            match_info = re.search(r'(\d+)\s+(\d{2}/\d{2})\s+(\d{2}:\d{2})', riga)
-            token_numerici = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', riga)
-            if len(token_numerici) >= 20:
-                interi = [int(t) for t in token_numerici]
-                finestra = []
-                visti = set()
-                for n in interi:
-                    if 1 <= n <= 90 and n not in visti:
-                        visti.add(n)
-                        finestra.append(n)
-                    if len(finestra) == 20:
-                        break
+        # Rimuoviamo i tag HTML per isolare il testo pulito ed evitare falsi positivi
+        testo_pulito = re.sub(r'<[^>]+>', ' | ', html)
+        
+        # Cerchiamo sequenze di numeri interi compresi tra 1 e 90
+        # Spezzettiamo il testo in blocchi per trovare le estrazioni da 20 numeri
+        token_testo = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', testo_pulito)
+        
+        interi = [int(t) for t in token_testo]
+        
+        # Scorriamo la lista cercando finestre valide di estrazioni (ci aspettiamo sequenze con numeri validi del lotto)
+        i = 0
+        while i < len(interi) - 19:
+            finestra = interi[i:i+20]
+            # Verifichiamo che siano tutti numeri tra 1 e 90 univoci o tipici di un'estrazione
+            if len(set(finestra)) >= 15: # tolleranza minima per evitare doppioni interni spuri
+                # Prendiamo i primi 20 numeri unici validi
+                 Estratti_validi = []
+                 for n in finestra:
+                     if 1 <= n <= 90 and n not in Estratti_validi:
+                         Estratti_validi.append(n)
                 
-                if len(finestra) == 20:
-                    id_conc = match_info.group(1) if match_info else "N/D"
-                    data_conc = match_info.group(2) if match_info else ""
-                    ora_conc = match_info.group(3) if match_info else ""
-                    
+                if len(Estratti_validi) == 20:
+                    Estratti_validi.sort()
+                    # Creiamo un oggetto estrazione fittizio o strutturato
                     estrazione_obj = {
-                        'id': id_conc,
-                        'data': data_conc,
-                        'ora': ora_conc,
-                        'numeri': finestra
+                        'id': f"Estrazione_{len(estrazioni_trovate)+1}",
+                        'data': 'Oggi',
+                        'ora': '',
+                        'numeri': Estratti_validi
                     }
-                    
                     if estrazione_obj not in estrazioni_trovate:
                         estrazioni_trovate.append(estrazione_obj)
+                    i += 20
+                else:
+                    i += 1
+            else:
+                i += 1
 
         return estrazioni_trovate[-15:] if len(estrazioni_trovate) >= 15 else estrazioni_trovate
 
@@ -209,4 +217,39 @@ def verifica_esito_ultima_giocata(ultima_estrazione):
     presi = set_giocati.intersection(set_estratto)
     punti = len(presi)
     
-    st.write(f"• Numeri giocati: {sorted(list(set_
+    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
+    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
+    
+    if punti >= 2:
+        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
+        st.balloons()
+    else:
+        st.info(f"ℹ️ Risultato: {punti} punti.")
+    st.markdown("---")
+
+# ==========================================
+# ELABORAZIONE PREVISIONE CICLOMETRICA
+# ==========================================
+def elabora_previsione(quantita_numeri):
+    archivio = carica_archivio()
+    
+    if len(archivio) < 1:
+        st.warning("Nessuna estrazione valida in archivio. Esegui prima la sincronizzazione.")
+        return
+
+    st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
+    
+    ultima_estrazione = archivio[-1]['numeri']
+    previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
+    salva_giocata(previsione)
+
+    risultato_str = ",".join(map(str, previsione)) + ","
+
+    st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
+    st.code(risultato_str, language="")
+    st.info("📌 **Metodo applicato:** Calcolo geometrico dei diametrici e delle distanze armoniche (15, 30, 45).")
+
+# ==========================================
+# INTERFACCIA STREAMLIT (OTTIMIZZATA MOBILE)
+# ==========================================
+st.title("🤖 10eL
