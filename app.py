@@ -27,17 +27,29 @@ def carica_archivio():
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = []
+                archivio_strutturato = []
                 for ext in archivio:
+                    # Supporto per il nuovo formato strutturato con ID concorso, data, ora e numeri
                     if isinstance(ext, dict) and 'numeri' in ext:
                         nums = [int(n) for n in ext['numeri'] if 1 <= int(n) <= 90]
                         if len(nums) == 20:
-                            archivio_ordinato.append(sorted(nums))
+                            archivio_strutturato.append({
+                                'id': ext.get('id', 'N/D'),
+                                'data': ext.get('data', ''),
+                                'ora': ext.get('ora', ''),
+                                'numeri': sorted(nums)
+                            })
                     elif isinstance(ext, list):
+                        # Retrocompatibilità per vecchi formati a lista
                         nums = [int(n) for n in ext if 1 <= int(n) <= 90]
                         if len(nums) == 20:
-                            archivio_ordinato.append(sorted(nums))
-                return archivio_ordinato
+                            archivio_strutturato.append({
+                                'id': 'N/D',
+                                'data': '',
+                                'ora': '',
+                                'numeri': sorted(nums)
+                            })
+                return archivio_strutturato
         except Exception:
             return []
     return []
@@ -113,11 +125,11 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
     return candidati[:quantita_richiesta]
 
 # ==========================================
-# SCRAPING STRUTTURATO (10elotto5.it)
+# SCRAPING STRUTTURATO (ID, DATA, ORA, 20 NUMERI)
 # ==========================================
 def scarica_estrazioni_con_bypass():
     urls = [
-        "https://www.10elotto5minuti.it/10elotto-5-minuti-di-oggi/",
+        "https://www.10elotto5minuti.it/estrazioni-10-e-lotto-ogni-5-minuti-di-oggi/",
         "https://www.10elotto5minuti.it/10elotto-5-minuti.php"
     ]
     
@@ -148,10 +160,12 @@ def scarica_estrazioni_con_bypass():
 
     try:
         estrazioni_trovate = []
-        
-        # Estraiamo le sequenze numeriche filtrando blocchi puliti coerenti con il layout ufficiale
         righe_testo = html.split('\n')
+        
         for riga in righe_testo:
+            # Cerca pattern di data (es. 02/11) e ora (es. 00:30) associati al concorso
+            match_info = re.search(r'(\d+)\s+(\d{2}/\d{2})\s+(\d{2}:\d{2})', riga)
+            
             token_numerici = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', riga)
             if len(token_numerici) >= 20:
                 interi = [int(t) for t in token_numerici]
@@ -165,11 +179,22 @@ def scarica_estrazioni_con_bypass():
                         break
                 
                 if len(finestra) == 20:
-                    finestra.sort()
-                    if finestra not in estrazioni_trovate:
-                        estrazioni_trovate.append(finestra)
+                    id_conc = match_info.group(1) if match_info else "N/D"
+                    data_conc = match_info.group(2) if match_info else ""
+                    ora_conc = match_info.group(3) if match_info else ""
+                    
+                    estrazione_obj = {
+                        'id': id_conc,
+                        'data': data_conc,
+                        'ora': ora_conc,
+                        'numeri': finestra
+                    }
+                    
+                    if estrazione_obj not in estrazioni_trovate:
+                        estrazioni_trovate.append(estrazione_obj)
 
-        return estrazioni_trovate[-30:] if len(estrazioni_trovate) > 0 else []
+        # Restituiamo le ultime 15 estrazioni totali rilevate
+        return estrazioni_trovate[-15:] if len(estrazioni_trovate) >= 15 else estrazioni_trovate
 
     except Exception as e:
         st.error(f"Errore nello scraping: {e}")
@@ -211,78 +236,3 @@ def elabora_previsione(quantita_numeri):
         return
 
     st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
-    
-    ultima_estrazione = archivio[-1]
-    previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
-    salva_giocata(previsione)
-
-    risultato_str = ",".join(map(str, previsione)) + ","
-
-    st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
-    st.code(risultato_str, language="")
-    st.info("📌 **Metodo applicato:** Calcolo geometrico dei diametrici e delle distanze armoniche (15, 30, 45).")
-
-# ==========================================
-# INTERFACCIA STREAMLIT
-# ==========================================
-st.title("🤖 10eLotto Ciclometry Bot")
-st.write("Sistema di previsione basato sulla Ciclometria armonica e diametrali.")
-
-archivio_corrente = carica_archivio()
-st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
-
-quantita = st.sidebar.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Menu Operazioni")
-
-opzione = st.sidebar.radio(
-    "Scegli un'azione:",
-    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
-)
-
-if opzione == "Scarica Web, Verifica & Previsione":
-    if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scaricamento estrazioni ufficiali in corso..."):
-            estrazioni = scarica_estrazioni_con_bypass()
-            if len(estrazioni) > 0:
-                archivio = carica_archivio()
-                set_esistenti = {tuple(ext) for ext in archivio}
-                nuove_aggiunte = 0
-                for ext in estrazioni:
-                    chiave = tuple(ext)
-                    if chiave not in set_esistenti:
-                        archivio.append(ext)
-                        set_esistenti.add(chiave)
-                        nuove_aggiunte += 1
-                
-                salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate correttamente)")
-                
-                archivio_aggiornato = carica_archivio()
-                if len(archivio_aggiornato) > 0:
-                    verifica_esito_ultima_giocata(archivio_aggiornato[-1])
-                elabora_previsione(quantita)
-            else:
-                st.error("Impossibile estrarre i dati corretti dal sito. Riprova tra qualche istante.")
-
-elif opzione == "Genera Solamente Previsione":
-    if st.button("Genera Previsione da Archivio Locale", type="primary"):
-        with st.spinner("Elaborazione previsione in corso..."):
-            elabora_previsione(quantita)
-
-elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni Corrette")
-    archivio = carica_archivio()
-    if len(archivio) == 0:
-        st.info("Archivio vuoto o ripulito.")
-    else:
-        for idx, ext in enumerate(reversed(archivio)):
-            st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
-
-elif opzione == "Svuota Archivio":
-    if st.button("Conferma Cancellazione Archivio e Memoria", type="secondary"):
-        salva_archivio([])
-        if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
-            os.remove(NOME_FILE_ULTIMA_GIOCATA)
-        st.success("Archivio svuotato con successo.")
