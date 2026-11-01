@@ -1,11 +1,16 @@
-import streamlit as st
+import os
+import json
+import re
+import urllib.request
+import ssl
 import numpy as np
+import streamlit as st
 
 # ==========================================
-# CONFIGURAZIONE PAGINA (Ottimizzata per Mobile)
+# CONFIGURAZIONE PAGINA (Mobile-Friendly)
 # ==========================================
 st.set_page_config(
-    page_title="10eLotto Neural Bot",
+    page_title="10eLotto Neural Bot - 19 Estrazioni",
     page_icon="🤖",
     layout="centered"
 )
@@ -19,7 +24,7 @@ class NeuralNetworkRMSprop:
         self.hidden_size = hidden_size
         self.output_size = output_size
         
-        # Inizializzazione pesi
+        # Inizializzazione pesi (He / Xavier)
         self.W1 = np.random.randn(input_size, hidden_size) * np.sqrt(2.0 / input_size)
         self.b1 = np.zeros((1, hidden_size))
         self.W2 = np.random.randn(hidden_size, output_size) * np.sqrt(2.0 / hidden_size)
@@ -40,7 +45,7 @@ class NeuralNetworkRMSprop:
         probs = exp_z / np.sum(exp_z, axis=1, keepdims=True)
         return z1, a1, probs
 
-    def train_fast(self, X, Y, epochs=50, lr=0.001, beta=0.9, eps=1e-8):
+    def train_fast(self, X, Y, epochs=70, lr=0.001, beta=0.9, eps=1e-8):
         if X is None or len(X) == 0:
             return 0.0
         
@@ -87,81 +92,152 @@ class NeuralNetworkRMSprop:
         return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# INTERFACCIA STREAMLIT (Mobile Friendly)
+# SCRAPING ONLINE DA LOTTOLOGIA
+# ==========================================
+def estrai_numeri_da_testo(testo, limite=20):
+    pezzi = re.findall(r'\d+', testo)
+    numeri_validi = []
+    visti = set()
+    for p in pezzi:
+        if len(p) > 2 and len(p) % 2 == 0:
+            for j in range(0, len(p), 2):
+                sub = int(p[j:j+2])
+                if 1 <= sub <= 90 and sub not in visti:
+                    visti.add(sub)
+                    numeri_validi.append(sub)
+        else:
+            val = int(p)
+            if 1 <= val <= 90 and val not in visti:
+                visti.add(val)
+                numeri_validi.append(val)
+        if len(numeri_validi) == limite:
+            break
+    return numeri_validi
+
+def scarica_estrazioni_lottologia():
+    url = "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://lottologia.com/'
+    }
+    
+    estrazioni = []
+    urls = [url, "https://lottologia.com/10elotto5minuti/estrazioni"]
+    
+    for u in urls:
+        try:
+            req = urllib.request.Request(u, headers=headers)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+                html = response.read().decode('utf-8', 'ignore')
+                blocchi = re.split(r'#(\d+)', html)
+                
+                for i in range(1, len(blocchi), 2):
+                    id_concorso = int(blocchi[i])
+                    testo_blocco = blocchi[i+1]
+                    
+                    if id_concorso < 100 or id_concorso > 9999999:
+                        continue
+
+                    match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
+                    numeri_base = []
+                    if match_num:
+                        numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
+                    if len(numeri_base) < 20:
+                        numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
+
+                    if len(numeri_base) == 20:
+                        if not any(e['id'] == id_concorso for e in estrazioni):
+                            estrazioni.append({
+                                'id': id_concorso,
+                                'base': sorted(numeri_base)
+                            })
+        except Exception:
+            continue
+            
+        if len(estrazioni) >= 20:
+            break
+
+    if estrazioni:
+        estrazioni.sort(key=lambda x: x['id'])
+        return estrazioni
+    return []
+
+# ==========================================
+# INTERFACCIA STREAMLIT MOBILE
 # ==========================================
 st.title("🤖 10eLotto Neural Bot")
-st.write("Propagazione One-Hot & RMSprop ottimizzata per smartphone.")
+st.write("Scraping automatico da Lottologia e addestramento sulle **ultime 19 estrazioni**.")
 
-# Inizializzazione stato sessione per mantenere la rete attiva
 if 'nn' not in st.session_state:
     st.session_state.nn = NeuralNetworkRMSprop()
-if 'trained' not in st.session_state:
-    st.session_state.trained = False
+if 'estrazioni' not in st.session_state:
+    st.session_state.estrazioni = []
+
+target_count = st.sidebar.slider("Numeri da generare", min_value=2, max_value=10, value=4)
 
 st.markdown("---")
-st.subheader("1. Carica Storico / Botstorico (1-90)")
-storico_text = st.text_area("Incolla i numeri separati da virgola o spazio:", height=120)
-
-target_count = st.slider("Quanti numeri vuoi generare in previsione?", min_value=2, max_value=10, value=4)
-
-if st.button("Carica e Addestra Ora", type="primary"):
-    if not storico_text.strip():
-        st.warning("Inserisci prima lo storico dei numeri.")
-    else:
-        try:
-            numeri = [int(n.strip()) for n in storico_text.replace("\n", ",").split(",") if n.strip().isdigit()]
-            numeri = [n for n in numeri if 1 <= n <= 90]
+if st.button("🔄 Scarica Online & Addestra (Ultime 19)", type="primary"):
+    with st.spinner("Scaricamento estrazioni in corso da Lottologia..."):
+        dati_web = scarica_estrazioni_lottologia()
+        
+        if len(dati_web) >= 19:
+            st.session_state.estrazioni = dati_web[-19:]  # Filtriamo esattamente le ultime 19 estrazioni
             
-            if len(numeri) < 4:
-                st.error("Inserisci almeno 4 numeri validi (1-90) nello storico.")
-            else:
-                X_list, Y_list = [], []
-                for i in range(len(numeri) - 3):
-                    seq = numeri[i:i+3]
-                    target = numeri[i+3]
-                    
-                    x_onehot = np.zeros(270)
-                    for idx, num in enumerate(seq):
-                        if 1 <= num <= 90:
-                            x_onehot[idx * 90 + (num - 1)] = 1.0
-                    X_list.append(x_onehot)
-                    
-                    y_onehot = np.zeros(90)
-                    if 1 <= target <= 90:
-                        y_onehot[target - 1] = 1.0
-                    Y_list.append(y_onehot)
+            # Preparazione dataset di addestramento dai numeri base
+            # Creiamo una sequenza lineare dei primi numeri estratti o delle sequenze per la rete neurale
+            sequenza_numeri = []
+            for ext in st.session_state.estrazioni:
+                sequenza_numeri.extend(ext['base'])
                 
-                X = np.array(X_list)
-                Y = np.array(Y_list)
+            X_list, Y_list = [], []
+            for i in range(len(sequenza_numeri) - 3):
+                seq = sequenza_numeri[i:i+3]
+                target = sequenza_numeri[i+3]
                 
-                with st.spinner("Addestramento della rete neurale in corso..."):
-                    loss = st.session_state.nn.train_fast(X, Y, epochs=60, lr=0.001)
+                x_onehot = np.zeros(270)
+                for idx, num in enumerate(seq):
+                    if 1 <= num <= 90:
+                        x_onehot[idx * 90 + (num - 1)] = 1.0
+                X_list.append(x_onehot)
                 
-                st.session_state.trained = True
-                st.success(f"Addestramento completato! Loss: {loss:.4f}")
-        except Exception as e:
-            st.error(f"Errore nella lettura dello storico: {e}")
+                y_onehot = np.zeros(90)
+                if 1 <= target <= 90:
+                    y_onehot[target - 1] = 1.0
+                Y_list.append(y_onehot)
+                
+            X = np.array(X_list)
+            Y = np.array(Y_list)
+            
+            with st.spinner("Addestramento della rete sulle ultime 19 estrazioni..."):
+                loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
+            
+            st.success(f"✅ Addestrate con successo le ultime 19 estrazioni! (Loss: {loss:.4f})")
+            st.info(f"Ultimo Concorso Scaricato: #{st.session_state.estrazioni[-1]['id']}")
+        else:
+            st.error(f"Trovate solo {len(dati_web)} estrazioni sul sito. Riprova tra poco.")
 
 st.markdown("---")
-st.subheader("2. Genera Previsione")
-ultimi_input = st.text_input("Inserisci gli ultimi 3 numeri estratti (es. 12, 45, 89):")
+st.subheader("🎯 Calcola Previsione Corrente")
 
-if st.button("Genera Previsione Corrente"):
-    if not st.session_state.trained:
-        st.warning("Prima devi caricare lo storico e cliccare su 'Carica e Addestra Ora'!")
-    else:
-        try:
-            ultimi = [int(n.strip()) for n in ultimi_input.replace(" ", ",").split(",") if n.strip().isdigit()]
-            if len(ultimi) < 3:
-                st.warning("Inserisci almeno 3 numeri per effettuare la previsione.")
-            else:
-                last_3 = ultimi[-3:]
-                top_k = st.session_state.nn.predict_top_k(last_3, k=target_count)
-                
-                # Formattazione richiesta: stringa di numeri senza spazi dopo la virgola e virgola finale
-                risultato_str = ",".join(map(str, top_k)) + ","
-                
-                st.markdown("### Risultato:")
-                st.code(risultato_str, language="")
-        except Exception as e:
-            st.error(f"Errore durante la previsione: {e}")
+if st.session_state.estrazioni:
+    ultima_ext = st.session_state.estrazioni[-1]['base']
+    st.write(f"Numeri base dell'ultimo concorso (#19): `{ultima_ext}`")
+    
+    # Prendiamo gli ultimi 3 numeri estratti per fare la predizione
+    last_3 = ultima_ext[-3:]
+    
+    if st.button("Genera Previsione Ora"):
+        top_k = st.session_state.nn.predict_top_k(last_3, k=target_count)
+        
+        # Formattazione richiesta: senza spazi dopo la virgola e virgola finale
+        risultato_str = ",".join(map(str, top_k)) + ","
+        
+        st.markdown("### Previsione Generata:")
+        st.code(risultato_str, language="")
+else:
+    st.warning("Premi il pulsante in alto per scaricare le ultime 19 estrazioni online e addestrare il bot.")
