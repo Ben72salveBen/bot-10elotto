@@ -10,8 +10,8 @@ import streamlit as st
 # CONFIGURAZIONE PAGINA
 # ==========================================
 st.set_page_config(
-    page_title="10eLotto Ciclometry Bot",
-    page_icon="🧬",
+    page_title="10eLotto Neural Bot - 19 Estrazioni",
+    page_icon="🤖",
     layout="centered"
 )
 
@@ -27,19 +27,11 @@ def carica_archivio():
         try:
             with open(NOME_FILE_ARCHIVIO, "r", encoding="utf-8") as f:
                 archivio = json.load(f)
-                archivio_ordinato = []
-                for ext in archivio:
-                    if isinstance(ext, dict) and 'numeri' in ext:
-                        nums = [int(n) for n in ext['numeri'] if 1 <= int(n) <= 90]
-                        if len(nums) == 20:
-                            archivio_ordinato.append(sorted(nums))
-                    elif isinstance(ext, list):
-                        nums = [int(n) for n in ext if 1 <= int(n) <= 90]
-                        if len(nums) == 20:
-                            archivio_ordinato.append(sorted(nums))
+                # Filtriamo solo le estrazioni con esattamente 20 numeri validi
+                archivio_ordinato = [sorted([int(n) for n in ext]) for ext in archivio if len(ext) == 20]
                 return archivio_ordinato
-        except Exception:
-            return []
+        except Exception as e:
+            st.error(f"Errore nella lettura dell'archivio: {e}")
     return []
 
 def salva_archivio(archivio):
@@ -47,7 +39,8 @@ def salva_archivio(archivio):
         with open(NOME_FILE_ARCHIVIO, "w", encoding="utf-8") as f:
             json.dump(archivio, f, ensure_ascii=False, indent=4)
         return True
-    except Exception:
+    except Exception as e:
+        st.error(f"Errore salvataggio archivio: {e}")
         return False
 
 def salva_giocata(numeri_scelti):
@@ -67,172 +60,253 @@ def carica_giocata():
     return None
 
 # ==========================================
-# MODULO CICLOMETRIA ARMONICA
+# RETE NEURALE MULTI-STRATO (270-64-90) + RMSPROP
 # ==========================================
-def distanza_ciclometrica(a, b):
-    diff = abs(a - b)
-    return min(diff, 90 - diff)
-
-def get_diametrale(n):
-    diam = (n + 45) % 90
-    return 90 if diam == 0 else diam
-
-def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
-    candidati = []
-    
-    for n in ultimi_numeri:
-        diam = get_diametrale(int(n))
-        if diam not in candidati:
-            candidati.append(diam)
+class NeuralNetworkRMSprop:
+    def __init__(self, input_size=270, hidden_size=64, output_size=90):
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
         
-    for i in range(len(ultimi_numeri)):
-        for j in range(i + 1, len(ultimi_numeri)):
-            n1 = int(ultimi_numeri[i])
-            n2 = int(ultimi_numeri[j])
-            dist = distanza_ciclometrica(n1, n2)
+        # Inizializzazione pesi
+        self.W1 = np.random.randn(input_size, hidden_size) * np.sqrt(2.0 / input_size)
+        self.b1 = np.zeros((1, hidden_size))
+        self.W2 = np.random.randn(hidden_size, output_size) * np.sqrt(2.0 / hidden_size)
+        self.b2 = np.zeros((1, output_size))
+        
+        # Accumulatori RMSprop
+        self.v_W1 = np.zeros_like(self.W1)
+        self.v_b1 = np.zeros_like(self.b1)
+        self.v_W2 = np.zeros_like(self.W2)
+        self.v_b2 = np.zeros_like(self.b2)
+
+    def forward(self, X):
+        z1 = np.dot(X, self.W1) + self.b1
+        a1 = np.maximum(0, z1)  # ReLU
+        z2 = np.dot(a1, self.W2) + self.b2
+        
+        exp_z = np.exp(z2 - np.max(z2, axis=1, keepdims=True))
+        probs = exp_z / np.sum(exp_z, axis=1, keepdims=True)
+        return z1, a1, probs
+
+    def train_fast(self, X, Y, epochs=70, lr=0.001, beta=0.9, eps=1e-8):
+        if X is None or len(X) == 0:
+            return 0.0
+        
+        m = X.shape[0]
+        
+        for _ in range(epochs):
+            z1, a1, probs = self.forward(X)
             
-            if dist in [15, 30, 45]:
-                comp1 = (n1 + dist) % 90
-                comp2 = (n2 - dist) % 90
-                if comp1 == 0: comp1 = 90
-                if comp2 == 0: comp2 = 90
-                
-                if comp1 not in candidati: candidati.append(comp1)
-                if comp2 not in candidati: candidati.append(comp2)
-                
-    for n in ultimi_numeri:
-        val = int(n)
-        if val not in candidati:
-            candidati.append(val)
+            dz2 = probs - Y
+            dW2 = np.dot(a1.T, dz2) / m
+            db2 = np.sum(dz2, axis=0, keepdims=True) / m
             
-    for n in range(1, 91):
-        if n not in candidati:
-            candidati.append(n)
+            da1 = np.dot(dz2, self.W2.T)
+            dz1 = da1 * (z1 > 0)
+            dW1 = np.dot(X.T, dz1) / m
+            db1 = np.sum(dz1, axis=0, keepdims=True) / m
             
-    candidati.sort()
-    return candidati[:quantita_richiesta]
+            self.v_W1 = beta * self.v_W1 + (1 - beta) * (dW1 ** 2)
+            self.v_b1 = beta * self.v_b1 + (1 - beta) * (db1 ** 2)
+            self.v_W2 = beta * self.v_W2 + (1 - beta) * (dW2 ** 2)
+            self.v_b2 = beta * self.v_b2 + (1 - beta) * (db2 ** 2)
+            
+            self.W1 -= (lr / (np.sqrt(self.v_W1) + eps)) * dW1
+            self.b1 -= (lr / (np.sqrt(self.v_b1) + eps)) * db1
+            self.W2 -= (lr / (np.sqrt(self.v_W2) + eps)) * dW2
+            self.b2 -= (lr / (np.sqrt(self.v_b2) + eps)) * db2
+            
+        loss = -np.mean(np.sum(Y * np.log(probs + 1e-8), axis=1))
+        return loss
+
+    def predict_top_k(self, last_3, k=4):
+        if len(last_3) < 3:
+            return []
+            
+        x_onehot = np.zeros(270)
+        for idx, num in enumerate(last_3):
+            if 1 <= num <= 90:
+                x_onehot[idx * 90 + (num - 1)] = 1.0
+            
+        X = x_onehot.reshape(1, -1)
+        _, _, probs = self.forward(X)
+        
+        top_k_indices = np.argsort(probs[0])[-k:]
+        return sorted((top_k_indices + 1).tolist())
 
 # ==========================================
-# PARSER ROBUSTO PER ESTRAZIONE DATI
+# FUNZIONE DI ESTRAZIONE DATI (DAL TUO CODICE)
 # ==========================================
-def estrai_numeri_puliti(testo):
-    # Estrae tutte le cifre e le suddivide in coppie da 2 (formato 10eLotto attaccato es. 010207...)
-    pezzi = re.findall(r'\d+', testo)
-    numeri_validi = []
-    visti = set()
-    
-    for p in pezzi:
-        # Se il blocco ha una lunghezza pari maggiore di 2, spezzettalo in numeri a 2 cifre
-        if len(p) >= 2 and len(p) % 2 == 0:
-            for j in range(0, len(p), 2):
-                sub = int(p[j:j+2])
-                if 1 <= sub <= 90 and sub not in visti:
-                    visti.add(sub)
-                    numeri_validi.append(sub)
-        else:
-            val = int(p)
-            if 1 <= val <= 90 and val not in visti:
-                visti.add(val)
-                numeri_validi.append(val)
-                
-        if len(numeri_validi) >= 20:
-            break
-            
-    return sorted(numeri_validi[:20])
-
 def scarica_estrazioni_con_bypass():
-    urls = [
-        "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it",
-        "https://lottologia.com/10elotto5minuti/estrazioni"
-    ]
+    url = "https://lottologia.com/10elotto5minuti/estrazioni"
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8',
+        'Connection': 'keep-alive',
         'Referer': 'https://lottologia.com/'
     }
     
+    req = urllib.request.Request(url, headers=headers)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     
-    html = ""
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
-                html = response.read().decode('utf-8', 'ignore')
-                if "#" in html:
-                    break
-        except Exception:
-            continue
-
-    if not html:
-        return []
-
     try:
-        estrazioni_trovate = []
-        # Suddividiamo la pagina in base ai cancelletti dei concorsi (#287, #286, ecc.)
-        blocchi = re.split(r'#(\d+)', html)
-        
-        for i in range(1, len(blocchi), 2):
-            id_concorso = int(blocchi[i])
-            if id_concorso < 100: # Scarta ID falsi o troppo bassi
-                continue
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            html = response.read().decode('utf-8', 'ignore')
+            
+            if "Domande Frequenti" in html:
+                html = html.split("Domande Frequenti")[0]
+            elif "domande frequenti" in html:
+                html = html.split("domande frequenti")[0]
                 
-            testo_blocco = blocchi[i+1]
+            if "Seleziona Numeri" in html:
+                html = html.split("Seleziona Numeri")[-1]
+            elif "seleziona numeri" in html:
+                html = html.split("seleziona numeri")[-1]
             
-            # Isola la sotto-sezione dei numeri base prima della voce "Oro" o "Extra"
-            parts = re.split(r'Oro|Extra', testo_blocco, flags=re.IGNORECASE)
-            sezione_numeri = parts[0]
+            estrazioni_trovate = []
+            blocchi = re.split(r'#(\d+)', html)
             
-            numeri_20 = estrai_numeri_puliti(sezione_numeri)
-            
-            if len(numeri_20) == 20:
-                estrazioni_trovate.append({
-                    'id': id_concorso,
-                    'numeri': numeri_20
-                })
+            for i in range(1, len(blocchi), 2):
+                id_concorso = int(blocchi[i])
+                testo_blocco = blocchi[i+1]
+                
+                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
+                    continue
+                
+                match_num = re.search(r'Numeri\s*([\s\S]*?)(?=Oro|Extra|Doppio|$)', testo_blocco, re.IGNORECASE)
+                if match_num:
+                    testo_sezione = match_num.group(1)
+                    pezzi_cifre = re.findall(r'\d+', testo_sezione)
+                    
+                    numeri_validi = []
+                    visti = set()
+                    
+                    for p in pezzi_cifre:
+                        if len(p) > 2 and len(p) % 2 == 0:
+                            for j in range(0, len(p), 2):
+                                sub = int(p[j:j+2])
+                                if 1 <= sub <= 90 and sub not in visti:
+                                    visti.add(sub)
+                                    numeri_validi.append(sub)
+                        else:
+                            val = int(p)
+                            if 1 <= val <= 90 and val not in visti:
+                                visti.add(val)
+                                numeri_validi.append(val)
+                                
+                        if len(numeri_validi) == 20:
+                            break
+                    
+                    if len(numeri_validi) == 20:
+                        numeri_validi.sort()
+                        estrazioni_trovate.append({
+                            'id': id_concorso,
+                            'numeri': numeri_validi
+                        })
 
-        if not estrazioni_trovate:
-            return []
+            if not estrazioni_trovate:
+                return []
 
-        # Ordina per ID crescente per mantenere la cronologia corretta
-        estrazioni_trovate.sort(key=lambda x: x['id'])
-        return [item['numeri'] for item in estrazioni_trovate]
+            estrazioni_trovate.sort(key=lambda x: x['id'])
+            return [item['numeri'] for item in estrazioni_trovate]
 
     except Exception as e:
-        st.error(f-f"Errore nell'elaborazione dello scraping: {e}")
+        st.error(f"Errore di connessione durante lo scraping: {e}")
         return []
 
 # ==========================================
-# ELABORAZIONE PREVISIONE CICLOMETRICA
+# VERIFICA ESITO ULTIMA GIOCATA
 # ==========================================
+def verifica_esito_ultima_giocata(ultima_estrazione):
+    ultima_giocata = carica_giocata()
+    if not ultima_giocata:
+        return
+
+    st.markdown("### 📊 VERIFICA ESITO GIOCATA PRECEDENTE:")
+    set_estratto = set(ultima_estrazione)
+    set_giocati = set(ultima_giocata)
+    
+    presi = set_giocati.intersection(set_estratto)
+    punti = len(presi)
+    
+    st.write(f"• Numeri giocati: {sorted(list(set_giocati))}")
+    st.write(f"• Numeri usciti: {sorted(list(set_estratto))}")
+    
+    if punti >= 2:
+        st.success(f"🎉 **RISULTATO: VINCENTE! {punti} PUNTI REALIZZATI!** (Indovinati: {sorted(list(presi))})")
+        st.balloons()
+    else:
+        st.info(f"ℹ️ Risultato: {punti} punti.")
+    st.markdown("---")
+
+# ==========================================
+# ELABORAZIONE PREVISIONE CON 19 ESTRAZIONI
+# ==========================================
+if 'nn' not in st.session_state:
+    st.session_state.nn = NeuralNetworkRMSprop()
+
 def elabora_previsione(quantita_numeri):
     archivio = carica_archivio()
     
-    if len(archivio) < 1:
-        st.warning("Nessuna estrazione valida in archivio. Esegui prima la sincronizzazione dal web.")
+    if len(archivio) < 5:
+        st.warning("Servono almeno 5 estrazioni in archivio per generare una previsione.")
         return
 
-    st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
+    # Seleziona esattamente le ultime 19 estrazioni più recenti
+    ultime_19 = archivio[-19:]
+    st.info(f"Addestramento rete neurale in corso sulle ultime {len(ultime_19)} estrazioni...")
+
+    sequenza_numeri = []
+    for ext in ultime_19:
+        sequenza_numeri.extend(ext)
+        
+    X_list, Y_list = [], []
+    for i in range(len(sequenza_numeri) - 3):
+        seq = sequenza_numeri[i:i+3]
+        target = sequenza_numeri[i+3]
+        
+        x_onehot = np.zeros(270)
+        for idx, num in enumerate(seq):
+            if 1 <= num <= 90:
+                x_onehot[idx * 90 + (num - 1)] = 1.0
+        X_list.append(x_onehot)
+        
+        y_onehot = np.zeros(90)
+        if 1 <= target <= 90:
+            y_onehot[target - 1] = 1.0
+        Y_list.append(y_onehot)
+        
+    X = np.array(X_list)
+    Y = np.array(Y_list)
     
+    # Addestramento rapido RMSprop
+    loss = st.session_state.nn.train_fast(X, Y, epochs=70, lr=0.001)
+    
+    # Previsione basata sugli ultimi 3 numeri dell'ultima estrazione
     ultima_estrazione = archivio[-1]
-    previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
-    salva_giocata(previsione)
+    last_3 = ultima_estrazione[-3:]
+    
+    top_k = st.session_state.nn.predict_top_k(last_3, k=quantita_numeri)
+    salva_giocata(top_k)
 
-    risultato_str = ",".join(map(str, previsione)) + ","
+    # Formattazione richiesta: stringa senza spazi dopo la virgola e virgola finale
+    risultato_str = ",".join(map(str, top_k)) + ","
 
-    st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
+    st.markdown(f"### 🤖 PREVISIONE NEURALE ({quantita_numeri} NUMERI):")
     st.code(risultato_str, language="")
-    st.info("📌 **Metodo applicato:** Calcolo geometrico dei diametrici e delle distanze armoniche (15, 30, 45).")
+    
+    st.info(f"📌 **Loss finale addestramento (ultime 19 estrazioni):** {loss:.4f}")
 
 # ==========================================
 # INTERFACCIA STREAMLIT
 # ==========================================
-st.title("🤖 10eLotto Ciclometry Bot")
-st.write("Sistema di previsione basato sulla Ciclometria armonica e diametrali.")
+st.title("🤖 10eLotto Neural Bot (19 Estrazioni)")
+st.write("Rete Neurale One-Hot RMSprop addestrata dinamicamente sulle ultime 19 estrazioni online.")
 
 archivio_corrente = carica_archivio()
 st.sidebar.metric(label="Estrazioni in Archivio", value=len(archivio_corrente))
@@ -249,7 +323,7 @@ opzione = st.sidebar.radio(
 
 if opzione == "Scarica Web, Verifica & Previsione":
     if st.button("Avvia Sincronizzazione & Calcolo", type="primary"):
-        with st.spinner("Scaricamento estrazioni ufficiali in corso..."):
+        with st.spinner("Scraping estrazioni in corso..."):
             estrazioni = scarica_estrazioni_con_bypass()
             if len(estrazioni) > 0:
                 archivio = carica_archivio()
@@ -263,15 +337,12 @@ if opzione == "Scarica Web, Verifica & Previsione":
                         nuove_aggiunte += 1
                 
                 salva_archivio(archivio)
-                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate correttamente)")
+                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
                 
-                archivio_aggiornato = carica_archivio()
-                if len(archivio_aggiornato) > 0:
-                    # Pulisci eventuale archivio vecchio errato prima della verifica
-                    pass
+                verifica_esito_ultima_giocata(archivio[-1])
                 elabora_previsione(quantita)
             else:
-                st.error("Impossibile estrarre i dati corretti dal sito. Riprova tra qualche istante.")
+                st.error("Nessuna estrazione trovata sul web.")
 
 elif opzione == "Genera Solamente Previsione":
     if st.button("Genera Previsione da Archivio Locale", type="primary"):
@@ -279,10 +350,10 @@ elif opzione == "Genera Solamente Previsione":
             elabora_previsione(quantita)
 
 elif opzione == "Visualizza Archivio":
-    st.subheader("📁 Storico Estrazioni Corrette")
+    st.subheader("📁 Storico Estrazioni")
     archivio = carica_archivio()
     if len(archivio) == 0:
-        st.info("Archivio vuoto o ripulito.")
+        st.info("Archivio vuoto.")
     else:
         for idx, ext in enumerate(reversed(archivio)):
             st.text(f"#{len(archivio)-idx}: {', '.join(map(str, ext))}")
@@ -292,4 +363,4 @@ elif opzione == "Svuota Archivio":
         salva_archivio([])
         if os.path.exists(NOME_FILE_ULTIMA_GIOCATA):
             os.remove(NOME_FILE_ULTIMA_GIOCATA)
-        st.success("Archivio svuotato con successo.")
+        st.success("Archivio e ultime giocate cancellate con successo.")
