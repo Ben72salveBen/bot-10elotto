@@ -286,7 +286,7 @@ def addestra_modello_genetico(history_draws, pop_size, max_gen, target_n, progre
     return miglior_regola
 
 # ==========================================
-# SCRAPING ROBUSTO ARCHIVIO 10eLotto (Min 39 token/numeri verificati)
+# SCRAPING ESTESO DALL'ARCHIVIO UFFICIALE
 # ==========================================
 def estrai_numeri_da_testo(testo, limite):
     pezzi = re.findall(r'\d+', testo)
@@ -309,74 +309,77 @@ def estrai_numeri_da_testo(testo, limite):
     return numeri_validi
 
 def scarica_estrazioni_con_bypass():
-    url = "https://lottologia.com/10elotto5minuti/estrazioni"
+    # Puntiamo direttamente all'archivio esteso di Lottologia per prelevare più concorsi
+    url = "https://lottologia.com/10elotto5minuti/archivio-estrazioni/?lang=it"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': 'https://lottologia.com/'
     }
-    req = urllib.request.Request(url, headers=headers)
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
-            html = response.read().decode('utf-8', 'ignore')
-            if "Domande Frequenti" in html:
-                html = html.split("Domande Frequenti")[0]
-            if "Seleziona Numeri" in html:
-                html = html.split("Seleziona Numeri")[-1]
+    estrazioni_trovate = []
+    
+    # Tentativo su pagina archivio estesa e fallback sulla pagina live se necessario
+    urls_da_provare = [url, "https://lottologia.com/10elotto5minuti/estrazioni"]
+    
+    for target_url in urls_da_provare:
+        try:
+            req = urllib.request.Request(target_url, headers=headers)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
             
-            estrazioni_trovate = []
-            blocchi = re.split(r'#(\d+)', html)
+            with urllib.request.urlopen(req, context=ctx, timeout=20) as response:
+                html = response.read().decode('utf-8', 'ignore')
+                
+                blocchi = re.split(r'#(\d+)', html)
+                for i in range(1, len(blocchi), 2):
+                    id_concorso = int(blocchi[i])
+                    testo_blocco = blocchi[i+1]
+                    
+                    tutti_pezzi_grezzi = re.findall(r'\d+', testo_blocco)
+                    if len(tutti_pezzi_grezzi) < 25:
+                        continue
+                    
+                    match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
+                    numeri_base = []
+                    if match_num:
+                        numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
+                    if len(numeri_base) < 20:
+                        numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
+
+                    match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
+                    numeri_extra = []
+                    if match_extra:
+                        numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
+
+                    if len(numeri_base) == 20:
+                        tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
+                        # Evitiamo duplicati se l'id è già presente
+                        if not any(e['id'] == id_concorso for e in estrazioni_trovate):
+                            estrazioni_trovate.append({
+                                'id': id_concorso,
+                                'base': sorted(numeri_base),
+                                'extra': sorted(numeri_extra),
+                                'tutti': tutti_35
+                            })
+        except Exception:
+            continue
             
-            for i in range(1, len(blocchi), 2):
-                id_concorso = int(blocchi[i])
-                testo_blocco = blocchi[i+1]
-                
-                # Controllo robusto: verifichiamo che il blocco contenga abbastanza numeri/token estratti (almeno 39 in totale tra base ed extra)
-                tutti_pezzi_grezzi = re.findall(r'\d+', testo_blocco)
-                if len(tutti_pezzi_grezzi) < 30:
-                    continue
+        if len(estrazioni_trovate) >= 30:
+            break
 
-                if "Numeri" not in testo_blocco and "numeri" not in testo_blocco:
-                    continue
-                
-                match_num = re.search(r'Numeri[:\s]*([\s\S]*?)(?=Extra|Oro|Doppio|$)', testo_blocco, re.IGNORECASE)
-                numeri_base = []
-                if match_num:
-                    numeri_base = estrai_numeri_da_testo(match_num.group(1), 20)
-                if len(numeri_base) < 20:
-                    numeri_base = estrai_numeri_da_testo(testo_blocco, 20)
-
-                match_extra = re.search(r'Extra[:\s]*([\s\S]*?)(?=Doppio|Oro|$)', testo_blocco, re.IGNORECASE)
-                numeri_extra = []
-                if match_extra:
-                    numeri_extra = estrai_numeri_da_testo(match_extra.group(1), 15)
-
-                if len(numeri_base) == 20:
-                    tutti_35 = sorted(list(set(numeri_base + numeri_extra)))
-                    estrazioni_trovate.append({
-                        'id': id_concorso,
-                        'base': sorted(numeri_base),
-                        'extra': sorted(numeri_extra),
-                        'tutti': tutti_35
-                    })
-
-            if not estrazioni_trovate:
-                return []
-            estrazioni_trovate.sort(key=lambda x: x['id'])
-            return estrazioni_trovate
-    except Exception as e:
-        st.error(f"Errore di connessione: {e}")
-        return []
+    if estrazioni_trovate:
+        estrazioni_trovate.sort(key=lambda x: x['id'])
+        return estrazioni_trovate
+        
+    return []
 
 # ==========================================
 # INTERFACCIA STREAMLIT
 # ==========================================
 st.title("🧬 Bot 10eLotto Genetico - Multi-Core")
-st.write("Sistema evolutivo integrato con l'archivio unificato dei bot precedenti.")
+st.write("Sistema evolutivo integrato con l'archivio esteso e unificato.")
 
 menu = st.sidebar.selectbox("Menu", ["Previsione & Verifica", "Addestra Nuovo Modello", "Gestione Archivio"])
 
@@ -389,14 +392,19 @@ if menu == "Addestra Nuovo Modello":
     target_n = st.slider("Numeri da prevedere (Target)", 2, 10, 4)
     
     if st.button("Avvia Sincronizzazione Web & Addestramento", type="primary"):
-        with st.spinner("Scaricamento e validazione estrazioni in corso..."):
+        with st.spinner("Scaricamento archivio esteso in corso..."):
             estrazioni_web = scarica_estrazioni_con_bypass()
             if len(estrazioni_web) > 10:
-                archivio = estrazioni_web
+                # Uniamo o aggiorniamo l'archivio esistente preservando lo storico
+                esistenti = {e['id']: e for e in archivio}
+                for ext in estrazioni_web:
+                    esistenti[ext['id']] = ext
+                archivio = list(esistenti.values())
+                archivio.sort(key=lambda x: x['id'])
                 salva_archivio(archivio)
-                st.success(f"Scaricate e salvate {len(archivio)} estrazioni valide in archivio_lotto.json!")
+                st.success(f"Sincronizzazione completata! Totale concorsi in archivio: {len(archivio)}")
             else:
-                st.warning("Impossibile scaricare dal web o dati insufficienti. Verifico archivio locale...")
+                st.warning("Impossibile scaricare dal web. Uso l'archivio locale disponibile.")
                 
         if len(archivio) > 25:
             prog_bar = st.empty()
@@ -411,7 +419,7 @@ if menu == "Addestra Nuovo Modello":
                 json.dump(salvataggio, f, indent=4)
             st.success(f"Modello addestrato e salvato in '{nome_modello}'!")
         else:
-            st.error("Servono almeno 30 estrazioni in archivio per l'addestramento.")
+            st.error(f"Servono almeno 30 estrazioni in archivio per l'addestramento (attualmente ce ne sono {len(archivio)}).")
 
 elif menu == "Previsione & Verifica":
     st.subheader("🎯 Previsione Dinamica 10eLotto")
@@ -450,11 +458,16 @@ elif menu == "Previsione & Verifica":
 elif menu == "Gestione Archivio":
     st.subheader("📁 Gestione Storico Estrazioni")
     if st.button("Sincronizza Estrazioni da Lottologia"):
-        with st.spinner("Scaricamento..."):
+        with st.spinner("Scaricamento archivio esteso..."):
             estraz = scarica_estrazioni_con_bypass()
             if estraz:
-                salva_archivio(estraz)
-                st.success(f"Archivio aggiornato con {len(estraz)} concorsi in archivio_lotto.json!")
+                esistenti = {e['id']: e for e in archivio}
+                for ext in estraz:
+                    esistenti[ext['id']] = ext
+                archivio = list(esistenti.values())
+                archivio.sort(key=lambda x: x['id'])
+                salva_archivio(archivio)
+                st.success(f"Archivio aggiornato! Concorsi totali salvati: {len(archivio)}")
             else:
                 st.error("Errore durante lo scaricamento.")
                 
