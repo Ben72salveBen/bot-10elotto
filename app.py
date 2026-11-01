@@ -7,7 +7,7 @@ import numpy as np
 import streamlit as st
 
 # ==========================================
-# CONFIGURAZIONE PAGINA
+# CONFIGURAZIONE PAGINA (Ottimizzata Mobile)
 # ==========================================
 st.set_page_config(
     page_title="10eLotto Ciclometry Bot",
@@ -29,7 +29,6 @@ def carica_archivio():
                 archivio = json.load(f)
                 archivio_strutturato = []
                 for ext in archivio:
-                    # Supporto per il nuovo formato strutturato con ID concorso, data, ora e numeri
                     if isinstance(ext, dict) and 'numeri' in ext:
                         nums = [int(n) for n in ext['numeri'] if 1 <= int(n) <= 90]
                         if len(nums) == 20:
@@ -40,7 +39,6 @@ def carica_archivio():
                                 'numeri': sorted(nums)
                             })
                     elif isinstance(ext, list):
-                        # Retrocompatibilità per vecchi formati a lista
                         nums = [int(n) for n in ext if 1 <= int(n) <= 90]
                         if len(nums) == 20:
                             archivio_strutturato.append({
@@ -125,7 +123,7 @@ def analizza_ciclometria(ultimi_numeri, quantita_richiesta):
     return candidati[:quantita_richiesta]
 
 # ==========================================
-# SCRAPING STRUTTURATO (ID, DATA, ORA, 20 NUMERI)
+# SCRAPING STRUTTURATO
 # ==========================================
 def scarica_estrazioni_con_bypass():
     urls = [
@@ -163,9 +161,7 @@ def scarica_estrazioni_con_bypass():
         righe_testo = html.split('\n')
         
         for riga in righe_testo:
-            # Cerca pattern di data (es. 02/11) e ora (es. 00:30) associati al concorso
             match_info = re.search(r'(\d+)\s+(\d{2}/\d{2})\s+(\d{2}:\d{2})', riga)
-            
             token_numerici = re.findall(r'\b([1-9]|[1-8][0-9]|90)\b', riga)
             if len(token_numerici) >= 20:
                 interi = [int(t) for t in token_numerici]
@@ -193,7 +189,6 @@ def scarica_estrazioni_con_bypass():
                     if estrazione_obj not in estrazioni_trovate:
                         estrazioni_trovate.append(estrazione_obj)
 
-        # Restituiamo le ultime 15 estrazioni totali rilevate
         return estrazioni_trovate[-15:] if len(estrazioni_trovate) >= 15 else estrazioni_trovate
 
     except Exception as e:
@@ -236,3 +231,61 @@ def elabora_previsione(quantita_numeri):
         return
 
     st.info("Elaborazione quadro ciclometrico sull'ultima estrazione disponibile...")
+    
+    ultima_estrazione = archivio[-1]['numeri']
+    previsione = analizza_ciclometria(ultima_estrazione, quantita_numeri)
+    salva_giocata(previsione)
+
+    risultato_str = ",".join(map(str, previsione)) + ","
+
+    st.markdown(f"### 🧬 PREVISIONE CICLOMETRICA ({quantita_numeri} NUMERI):")
+    st.code(risultato_str, language="")
+    st.info("📌 **Metodo applicato:** Calcolo geometrico dei diametrici e delle distanze armoniche (15, 30, 45).")
+
+# ==========================================
+# INTERFACCIA PRINCIPALE (Ottimizzata per Telefono)
+# ==========================================
+st.title("🤖 10eLotto Ciclometry Bot")
+st.write("Sistema mobile-friendly basato su Ciclometria armonica.")
+
+archivio_corrente = carica_archivio()
+st.metric(label="Estrazioni in Archivio Locale", value=len(archivio_corrente))
+
+st.markdown("---")
+st.subheader("⚙️ Pannello Operazioni")
+
+quantita = st.slider("Quanti numeri vuoi selezionare?", min_value=2, max_value=10, value=4)
+
+opzione = st.radio(
+    "Scegli un'azione:",
+    ("Scarica Web, Verifica & Previsione", "Genera Solamente Previsione", "Visualizza Archivio", "Svuota Archivio")
+)
+
+st.markdown("---")
+
+if opzione == "Scarica Web, Verifica & Previsione":
+    if st.button("🚀 Avvia Sincronizzazione & Calcolo", type="primary", use_container_width=True):
+        with st.spinner("Scaricamento blocco estrazioni ufficiali in corso..."):
+            estrazioni = scarica_estrazioni_con_bypass()
+            if len(estrazioni) > 0:
+                archivio = carica_archivio()
+                ids_esistenti = {str(item['id']) for item in archivio}
+                nuove_aggiunte = 0
+                for ext in estrazioni:
+                    if str(ext['id']) not in ids_esistenti:
+                        archivio.append(ext)
+                        ids_esistenti.add(str(ext['id']))
+                        nuove_aggiunte += 1
+                
+                salva_archivio(archivio)
+                st.success(f"Sincronizzazione completata! ({nuove_aggiunte} nuove estrazioni salvate)")
+                
+                archivio_aggiornato = carica_archivio()
+                if len(archivio_aggiornato) > 0:
+                    verifica_esito_ultima_giocata(archivio_aggiornato[-1]['numeri'])
+                elabora_previsione(quantita)
+            else:
+                st.error("Impossibile estrarre i dati corretti dal sito. Riprova tra qualche istante.")
+
+elif opzione == "Genera Solamente Previsione":
+    if st.
